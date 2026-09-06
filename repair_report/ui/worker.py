@@ -75,27 +75,34 @@ class ReportWorker(QObject):
             # message is shown for UX continuity with the spec's staged flow)
 
             self.progress.emit("Построение графиков…")
+            from repair_report.render.chart_pipeline import generate_charts
+
+            # Generated ONCE and shared across all selected formats -- each
+            # of HTML/PDF/DOCX used to call generate_charts independently,
+            # tripling matplotlib work (and the wall-clock time) for no
+            # benefit when a user picks all three formats at once.
+            chart_paths = generate_charts(report, Path(self.work_dir) / "charts")
             written = []
 
             if "html" in self.formats:
                 self.progress.emit("Генерация отчёта (HTML)…")
                 from repair_report.render.html_builder import save_html
 
-                save_html(report, self.profile, self.out_paths["html"], self.work_dir)
+                save_html(report, self.profile, self.out_paths["html"], self.work_dir, chart_paths)
                 written.append(self.out_paths["html"])
 
             if "pdf" in self.formats:
                 self.progress.emit("Генерация отчёта (PDF)…")
                 from repair_report.render.pdf_builder import save_pdf
 
-                save_pdf(report, self.profile, self.out_paths["pdf"], self.work_dir)
+                save_pdf(report, self.profile, self.out_paths["pdf"], self.work_dir, chart_paths)
                 written.append(self.out_paths["pdf"])
 
             if "docx" in self.formats:
                 self.progress.emit("Генерация отчёта (DOCX)…")
                 from repair_report.render.docx_builder import save_docx
 
-                save_docx(report, self.profile, self.out_paths["docx"], self.work_dir)
+                save_docx(report, self.profile, self.out_paths["docx"], self.work_dir, chart_paths)
                 written.append(self.out_paths["docx"])
 
             self.progress.emit("Готово")

@@ -37,10 +37,17 @@ def _detail_columns():
     return [label for _, label in DETAIL_COLUMNS]
 
 
-def build_html(report: ReportData, profile: ClientProfile, work_dir: str | Path) -> str:
-    """Returns the rendered HTML as a string."""
+def build_html(report: ReportData, profile: ClientProfile, work_dir: str | Path, chart_paths: dict[str, str] | None = None) -> str:
+    """Returns the rendered HTML as a string.
+
+    `chart_paths`: pre-generated chart PNGs (see chart_pipeline.generate_charts).
+    Pass this in (shared across HTML/PDF/DOCX for one report run) to avoid
+    re-rendering every matplotlib chart 3 times over; if omitted, this
+    function generates its own (useful for calling build_html standalone).
+    """
     work_dir = Path(work_dir)
-    chart_paths = generate_charts(report, work_dir / "charts")
+    if chart_paths is None:
+        chart_paths = generate_charts(report, work_dir / "charts")
     charts_b64 = {k: _b64_image(v) for k, v in chart_paths.items()}
 
     settings = loader.app_settings()
@@ -177,6 +184,6 @@ def build_html(report: ReportData, profile: ClientProfile, work_dir: str | Path)
     return template.render(**context)
 
 
-def save_html(report: ReportData, profile: ClientProfile, out_path: str | Path, work_dir: str | Path) -> None:
-    html = build_html(report, profile, work_dir)
+def save_html(report: ReportData, profile: ClientProfile, out_path: str | Path, work_dir: str | Path, chart_paths: dict[str, str] | None = None) -> None:
+    html = build_html(report, profile, work_dir, chart_paths)
     Path(out_path).write_text(html, encoding="utf-8")

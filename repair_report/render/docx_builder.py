@@ -67,9 +67,15 @@ def _dynamics_rows(table, has_previous, name_map=None, money=True):
     return rows
 
 
-def save_docx(report: ReportData, profile: ClientProfile, out_path: str | Path, work_dir: str | Path) -> None:
+def save_docx(
+    report: ReportData,
+    profile: ClientProfile,
+    out_path: str | Path,
+    work_dir: str | Path,
+    chart_paths: dict[str, str] | None = None,
+) -> None:
     work_dir = Path(work_dir)
-    charts = generate_charts(report, work_dir / "charts")
+    charts = chart_paths if chart_paths is not None else generate_charts(report, work_dir / "charts")
     settings = loader.app_settings()
     top_n = settings["top_n_default"]
     has_prev = report.previous_available
