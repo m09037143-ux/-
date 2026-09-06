@@ -1,0 +1,8 @@
+[project]
+name = "repair-report-app"
+version = "0.1.0"
+description = "Automated monthly repair-service report generator (HTML/PDF/DOCX)"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
