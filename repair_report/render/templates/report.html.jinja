@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>{{ report_title }}</title>
+<style>
+  body { font-family: "DejaVu Sans", Arial, sans-serif; color: #1a1a1a; font-size: 13px; line-height: 1.45; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  h2 { font-size: 17px; margin-top: 28px; border-bottom: 2px solid #1f3864; padding-bottom: 4px; }
+  h3 { font-size: 14px; margin-top: 18px; color: #1f3864; }
+  .meta { color: #444; margin-bottom: 18px; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0 18px 0; }
+  th, td { border: 1px solid #ccc; padding: 4px 7px; text-align: left; font-size: 12px; }
+  th { background: #1f3864; color: white; }
+  tr.total-row { font-weight: bold; background: #eef1f7; }
+  .kpi-table td:nth-child(2), .kpi-table td:nth-child(3), .kpi-table td:nth-child(4) { text-align: right; }
+  .blurb { font-style: italic; color: #333; margin: 6px 0 14px 0; }
+  .chart { text-align: center; margin: 12px 0; }
+  .chart img { max-width: 640px; width: 100%; }
+  .placeholder { background: #fff8e6; border: 1px solid #e0a800; padding: 10px 14px; border-radius: 4px; color: #7a5c00; }
+  .page-break { page-break-before: always; }
+  .header-table td { border: none; padding: 2px 8px 2px 0; }
+  .num { text-align: right; }
+  .small-note { color: #777; font-size: 11px; }
+</style>
+</head>
+<body>
+
+{% macro dynamics_table(table, first_col, money=False, name_map=None, count_label="Кол-во тек.", prev_label="Кол-во пред.") %}
+<table>
+  <tr><th>{{ first_col }}</th><th>{{ count_label }}</th><th>{{ prev_label }}</th><th>Динамика</th><th>Сумма тек.</th></tr>
+  {% for r in table.rows %}
+  <tr>
+    <td>{{ name_map[r.name] if name_map else r.name }}</td>
+    <td class="num">{{ format_number(r.count_cur) }}</td>
+    <td class="num">{{ format_number(r.count_prev) if table.has_previous else "н/д" }}</td>
+    <td class="num">{{ format_dynamics(r.count_cur, r.count_prev) if table.has_previous else "н/д" }}</td>
+    <td class="num">{{ format_rub(r.sum_cur) if money else format_number(r.sum_cur) }}</td>
+  </tr>
+  {% endfor %}
+  <tr class="total-row">
+    <td>ИТОГ</td>
+    <td class="num">{{ format_number(table.total_count_cur) }}</td>
+    <td class="num">{{ format_number(table.total_count_prev) if table.has_previous else "н/д" }}</td>
+    <td class="num">{{ format_dynamics(table.total_count_cur, table.total_count_prev) if table.has_previous else "н/д" }}</td>
+    <td class="num">{{ format_rub(table.total_sum_cur) if money else format_number(table.total_sum_cur) }}</td>
+  </tr>
+</table>
+{% endmacro %}
+
+<h1>ЕЖЕМЕСЯЧНЫЙ ОТЧЕТ О ВЫПОЛНЕННОЙ РАБОТЕ</h1>
+<div class="meta">
+  Период: {{ period_label }}<br>
+  Сформирован: {{ generated_date }}
+</div>
+
+<table class="header-table">
+  <tr><td><b>Исполнитель</b></td><td>{{ profile.executor }}</td></tr>
+  <tr><td><b>Заказчик</b></td><td>{{ profile.customer }}</td></tr>
+  <tr><td><b>Договор</b></td><td>№ {{ profile.contract_number }} от {{ profile.contract_date }}</td></tr>
+</table>
+
+{% if not previous_available %}
+<p class="placeholder">{{ previous_note }}</p>
+{% endif %}
+
+<h2>1. Реестры текущего отчетного периода</h2>
+<p>Ниже представлены списки участников отчета и обслуживаемой техники.</p>
+
+<h3>1.1 Список сервисных центров</h3>
+<table>
+  <tr><th>№пп</th><th>Наименование АСЦ</th><th>Код АСЦ</th><th>Регион АСЦ</th></tr>
+  {% for r in asc_registry %}
+  <tr><td>{{ r.seq }}</td><td>{{ r.asc_name }}</td><td>{{ r.asc_code }}</td><td>{{ r.region }}</td></tr>
+  {% endfor %}
+</table>
+
+<h3>1.2 Общий список обслуживаемой техники</h3>
+<table>
+  <tr><th>Категория техники</th><th>Бренд</th><th>Модель</th><th>Количество случаев</th></tr>
+  {% for r in equipment_registry %}
+  <tr><td>{{ r.category }}</td><td>{{ r.brand }}</td><td>{{ r.model }}</td><td class="num">{{ r.count }}</td></tr>
+  {% endfor %}
+</table>
+
+<h2 class="page-break">2. Управленческое резюме</h2>
+<p>{{ summary_narrative }}</p>
+
+<table class="kpi-table">
+  <tr><th>Показатель</th><th>Текущий</th><th>Предыдущий</th><th>Динамика</th></tr>
+  <tr><td>Количество ремонтов</td><td>{{ kpi_count_cur }}</td><td>{{ kpi_count_prev }}</td><td>{{ kpi_count_dyn }}</td></tr>
+  <tr><td>Общая сумма</td><td>{{ kpi_sum_cur }}</td><td>{{ kpi_sum_prev }}</td><td>{{ kpi_sum_dyn }}</td></tr>
+  <tr><td>Средний чек</td><td>{{ kpi_avg_cur }}</td><td>{{ kpi_avg_prev }}</td><td>{{ kpi_avg_dyn }}</td></tr>
+</table>
+
+<div class="chart"><img src="{{ charts.section2_pie }}" alt="Структура затрат"></div>
+
+<h2>3. Структура затрат по видам техники</h2>
+<h3>Затраты по категориям</h3>
+{{ dynamics_table(equipment_by_sum, "Вид техники", money=True) }}
+<div class="chart"><img src="{{ charts.section3_by_sum }}"></div>
+
+<h3>По категориям (в разрезе количества)</h3>
+{{ dynamics_table(equipment_by_count, "Категория", money=True) }}
+<div class="chart"><img src="{{ charts.section3_by_count }}"></div>
+
+<h3>По уровням ремонта</h3>
+{{ dynamics_table(repair_level, "Уровень ремонта", money=True, name_map=repair_level_labels) }}
+<div class="chart"><img src="{{ charts.section3_level }}"></div>
+
+<h2 class="page-break">4. Разрезы данных</h2>
+<h3>По регионам</h3>
+{{ dynamics_table(regions_top, "Регион", money=True, count_label="Кол-во ремонтов", prev_label="Пред. кол-во") }}
+<div class="chart"><img src="{{ charts.section4_regions }}"></div>
+
+<h3>ТОП-15 АСЦ по количеству ремонтов</h3>
+<p><b>Максимальная и минимальная активность АСЦ</b></p>
+<p class="blurb">{{ asc_leader_follower }}</p>
+{{ dynamics_table(asc_top, "Наименование АСЦ", money=True) }}
+<div class="chart"><img src="{{ charts.section4_asc }}"></div>
+
+<h3>4.1 ТОП-15 АСЦ по затратам на выезд</h3>
+<p><b>Сводка по выездному обслуживанию АСЦ</b></p>
+<p class="blurb">{{ asc_visits_leader_follower }}</p>
+<table>
+  <tr><th>Наименование АСЦ</th><th>Кол-во выездов</th><th>Сумма выездов</th></tr>
+  {% for r in asc_visits_top %}
+  <tr><td>{{ r.name }}</td><td class="num">{{ r.visit_count }}</td><td class="num">{{ r.visit_sum_fmt }}</td></tr>
+  {% endfor %}
+  <tr class="total-row"><td>ИТОГ</td><td class="num">{{ asc_visits_total_count }}</td><td class="num">{{ asc_visits_total_sum }}</td></tr>
+</table>
+<div class="chart"><img src="{{ charts.section4_1_visits }}"></div>
+
+<h3>По брендам</h3>
+<p><b>Доминирующие и редко поступающие в ремонт бренды</b></p>
+<p class="blurb">{{ brands_leader_follower }}</p>
+{{ dynamics_table(brands_top, "Бренд", money=True) }}
+<div class="chart"><img src="{{ charts.section4_brands }}"></div>
+
+<h2 class="page-break">5. Эффективность АСЦ, Качество и SLA</h2>
+<h3>5.1 Золотой стандарт (Отличники)</h3>
+<p>АСЦ с низким чеком, идеальным заполнением кодов IRIS и долей НРП &lt; {{ golden_max_anr_pct }}%.</p>
+{% if golden_standard %}
+<table>
+  <tr><th>Наименование АСЦ</th><th>Заявок</th><th>Средний чек</th><th>Доля НРП</th></tr>
+  {% for r in golden_standard %}
+  <tr><td>{{ r.asc_name }}</td><td class="num">{{ r.claims }}</td><td class="num">{{ r.avg_check_fmt }}</td><td class="num">{{ r.anr_share_fmt }}</td></tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>Центров, полностью соответствующих «Золотому стандарту», не выявлено.</p>
+{% endif %}
+
+<h3>5.2 Зона риска (Аномально высокий НРП)</h3>
+<p>Доля актов о неремонтопригодности превышает среднюю по сети в {{ risk_zone_multiplier }} раза (Ср. по сети: {{ risk_zone_network_pct }}%).</p>
+<table>
+  <tr><th>Наименование АСЦ</th><th>Заявок</th><th>Доля_НРП</th></tr>
+  {% for r in risk_zone_rows %}
+  <tr><td>{{ r.asc_name }}</td><td class="num">{{ r.claims }}</td><td class="num">{{ r.anr_share_fmt }}</td></tr>
+  {% endfor %}
+</table>
+
+<h3>5.3 Анализ сроков ремонтов</h3>
+<p>{{ duration_narrative }}</p>
+<p><b>ТОП-10 самых долгих ремонтов</b></p>
+<table>
+  <tr><th>Наименование АСЦ</th><th>Бренд</th><th>Модель</th><th>Срок_ремонта_дней</th></tr>
+  {% for r in top_slow_repairs %}
+  <tr><td>{{ r.asc_name }}</td><td>{{ r.brand }}</td><td>{{ r.model }}</td><td class="num">{{ r.duration_days }} дн.</td></tr>
+  {% endfor %}
+</table>
+
+<h3>5.4 Брак из коробки (DOA &lt; {{ doa_max_days }} дней)</h3>
+<p>Модели техники, вышедшие из строя в течение первых {{ doa_max_days }} дней после продажи.</p>
+<table>
+  <tr><th>Бренд</th><th>Модель</th><th>Кол-во DOA</th></tr>
+  {% for r in doa_rows %}
+  <tr><td>{{ r.brand }}</td><td>{{ r.model }}</td><td class="num">{{ r.count }}</td></tr>
+  {% endfor %}
+</table>
+
+<h2 class="page-break">6. Аналитика по изготовителям</h2>
+<p><b>Распределение брака по заводам-изготовителям</b></p>
+<p class="blurb">{{ manufacturers_leader_follower }}</p>
+<table>
+  <tr><th>Изготовитель</th><th>Сумма (текущ)</th><th>Доля %</th><th>Сумма (пред)</th><th>Кол-во рем.</th><th>Кол-во моделей</th></tr>
+  {% for r in manufacturers %}
+  <tr><td>{{ r.name }}</td><td class="num">{{ r.sum_fmt }}</td><td class="num">{{ r.share_fmt }}</td><td class="num">{{ r.sum_prev_fmt }}</td><td class="num">{{ r.count_cur }}</td><td class="num">{{ r.model_count }}</td></tr>
+  {% endfor %}
+</table>
+<div class="chart"><img src="{{ charts.section6_manufacturers }}"></div>
+
+<h2 class="page-break">7. Анализ ТВ техники</h2>
+<h3>7.1. Распределение ТВ по диагоналям</h3>
+{{ dynamics_table(tv_diagonal, "ТВ с диагональю", money=True) }}
+<div class="chart"><img src="{{ charts.section7_1_diagonal }}"></div>
+
+<h3>7.2. Топ моделей по брендам ТВ</h3>
+<p><b>Наиболее и наименее проблемные модели ТВ</b></p>
+<p class="blurb">{{ tv_model_leader_follower }}</p>
+{% for b in tv_brand_models %}
+<p><b>Бренд: {{ b.brand }}</b></p>
+<table>
+  <tr><th>Модель</th><th>Кол-во ремонтов</th></tr>
+  {% for m in b.models %}
+  <tr><td>{{ m.model }}</td><td class="num">{{ m.count }}</td></tr>
+  {% endfor %}
+</table>
+{% endfor %}
+
+<h2 class="page-break">8. Аналитика по дефектам и IRIS кодам (ТВ техника)</h2>
+<h3>8.1. Обобщение: Самые частые цепочки IRIS кодов</h3>
+<p><b>Частотность возникновения дефектов (IRIS)</b></p>
+<p class="blurb">{{ iris_chain_leader_follower }}</p>
+<table>
+  <tr><th>Секция → Дефект → Ремонт</th><th>Кол-во</th></tr>
+  {% for r in iris_chains %}
+  <tr><td>{{ r.chain }}</td><td class="num">{{ r.count }}</td></tr>
+  {% endfor %}
+</table>
+
+<h3>8.2. Самые частые заявленные дефекты (Текст)</h3>
+<table>
+  <tr><th>Описание дефекта</th><th>Кол-во ремонтов</th></tr>
+  {% for r in defect_texts %}
+  <tr><td>{{ r.text }}</td><td class="num">{{ r.count }}</td></tr>
+  {% endfor %}
+</table>
+
+<h3>8.3. Ошибки кодирования IRIS</h3>
+{% if iris_errors %}
+<table>
+  <tr><th>АСЦ</th><th>Бренд</th><th>Модель</th><th>Секция</th><th>Дефект</th><th>Ремонт</th><th>Ошибки</th></tr>
+  {% for r in iris_errors %}
+  <tr><td>{{ r.asc_name }}</td><td>{{ r.brand }}</td><td>{{ r.model }}</td><td>{{ r.section }}</td><td>{{ r.defect }}</td><td>{{ r.repair }}</td><td>{{ r.errors }}</td></tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>Ошибок кодирования IRIS для телевизоров не выявлено.</p>
+{% endif %}
+
+<h2 class="page-break">9. Контроль Фрода и СБ</h2>
+<p><b>Подозрительные совпадения телефонов (накрутка)</b></p>
+<table>
+  <tr><th>Телефон</th><th>Клиент</th><th>Уникальных аппаратов</th></tr>
+  {% for r in fraud_rows %}
+  <tr><td>{{ r.phone }}</td><td>{{ r.client }}</td><td class="num">{{ r.unique_devices }}</td></tr>
+  {% endfor %}
+</table>
+
+{% if experimental_sections_enabled %}
+<h2 class="page-break">10. Аналитика поставок запасных частей</h2>
+<p class="placeholder">{{ section10_message }}</p>
+<table>
+  <tr>{% for c in section10_columns %}<th>{{ c }}</th>{% endfor %}</tr>
+</table>
+
+<h2>11. Аналитика Технической Поддержки</h2>
+<p class="placeholder">{{ section11_message }}</p>
+<table>
+  <tr>{% for c in section11_columns %}<th>{{ c }}</th>{% endfor %}</tr>
+</table>
+{% endif %}
+
+<h2 class="page-break">12. Детализация ремонтов (Текущий период)</h2>
+<p>Реестр всех строк из выгрузки актуального периода.</p>
+<table>
+  <tr>{% for col in detail_columns %}<th>{{ col }}</th>{% endfor %}</tr>
+  {% for row in detail_rows %}
+  <tr>{% for col in detail_columns %}<td>{{ row[col] }}</td>{% endfor %}</tr>
+  {% endfor %}
+</table>
+
+<p>&nbsp;</p>
+<p>{{ profile.signatory_title }} __________________ / {{ profile.signatory_name }} /</p>
+<p>— Конец отчёта —</p>
+
+</body>
+</html>

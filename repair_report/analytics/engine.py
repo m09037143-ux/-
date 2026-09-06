@@ -19,6 +19,7 @@ from repair_report.analytics import (
     fraud,
     iris_defects,
     manufacturers,
+    registries,
     regions_asc,
     sla_quality,
     summary,
@@ -40,6 +41,9 @@ class ReportData:
     all_periods: list[Period]
 
     column_report: ColumnReport
+
+    asc_registry: list[registries.AscRegistryRow]
+    equipment_registry: list[registries.EquipmentRegistryRow]
 
     kpis: summary.SummaryKpis
     kpis_prev: summary.SummaryKpis | None
@@ -134,6 +138,8 @@ def build_report(
         previous_note=selection.note,
         all_periods=all_periods,
         column_report=column_report,
+        asc_registry=registries.asc_registry(current_df),
+        equipment_registry=registries.equipment_registry(current_df),
         kpis=kpis,
         kpis_prev=kpis_prev,
         equipment_by_sum=eq_sum,
