@@ -1,0 +1,43 @@
+{
+  "_comment": "Tunable business-logic parameters. Ship this alongside the app; a user/admin can edit it (or the app can expose the fields it needs to expose in Settings) without touching code.",
+
+  "top_n_default": 15,
+  "top_n_asc_visits": 15,
+  "top_n_tv_brands": 5,
+  "top_n_tv_models_per_brand": 5,
+  "top_n_fraud": 10,
+  "top_n_slow_repairs": 10,
+  "top_n_doa": 15,
+  "top_n_iris_chains": 15,
+  "top_n_defect_text": 15,
+
+  "golden_standard": {
+    "max_anr_share_pct": 5.0,
+    "min_claims_threshold": 5,
+    "_comment": "An ASC qualifies for the 'Golden standard' (5.1) list only if ALL of: its average ticket is below the network average, all its IRIS fields are fully filled on every one of its repairs, its ANR share is below max_anr_share_pct, AND it has at least min_claims_threshold repairs this period. Verified against the reference report: without the claims-count floor, 7 ASCs with 1-3 total claims each spuriously qualify (a single non-ANR, fully-IRIS-coded repair trivially clears all three thresholds); with min_claims_threshold=5 (the same floor verified for risk_zone below), zero ASCs qualify, matching the reference text 'не выявлено' exactly."
+  },
+
+  "risk_zone": {
+    "multiplier_over_network_avg": 1.5,
+    "min_claims_threshold": 5,
+    "_comment": "An ASC enters the 'Risk zone' (5.2) list when its own ANR share exceeds (network ANR share * multiplier_over_network_avg) AND it has at least min_claims_threshold repairs this period. Verified against the reference report: without this floor, 34 ASCs qualify (most with 1-4 total claims, e.g. a single ANR repair = 100% share); the reference table shows exactly the 11 ASCs with >=5 claims -- confirming min_claims_threshold=5, not 0 and not the '>=3' suggested as a placeholder in the original product spec."
+  },
+
+  "doa": {
+    "max_days": 30,
+    "_comment": "DOA (dead-on-arrival) window: (Дата поступления - Дата продажи) in days, inclusive on both ends: 0 <= diff <= max_days. Verified against tests/fixtures Косовов file's absence and the July DOCX's DOA table (exact match at max_days=30 inclusive)."
+  },
+
+  "fraud": {
+    "min_unique_devices": 2,
+    "_comment": "A phone number is only surfaced in section 9 (fraud) if it is associated with at least this many distinct serial numbers."
+  },
+
+  "experimental_sections": {
+    "enabled": false,
+    "_comment": "Controls whether sections 10 (spare parts) and 11 (tech support) are included in generated reports. See docs/section_10_11_investigation.md for why these are disabled by default: neither the raw export nor the client's own intermediate pivot workbook contains the data these sections need."
+  },
+
+  "defect_text_case_insensitive": false,
+  "_defect_text_comment": "Section 8.2 groups by the exact text of 'Описание дефекта', case- and punctuation-sensitive, to match the verified reference report 1:1. Set this to true to fold case differences together instead."
+}

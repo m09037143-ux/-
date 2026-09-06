@@ -1,0 +1,17 @@
+{
+  "_comment": "Maps raw values of the 'Категория техники' column (from the source .xlsx) to the consolidated 'Вид техники' groups used in report section 3. Matching is case-insensitive and trims whitespace. 'startswith' entries match a raw category that begins with the given (lowercased) prefix -- used for families like 'Телевизоры NN-NN' or 'Стиральная машина ...'. Empty/NaN raw categories are handled separately by analytics/common.py (see MISSING_CATEGORY_LABEL) and are NOT listed here -- they surface as their own 'nan' row in section 3, per spec §1.4.",
+  "exact": {
+    "мониторы": "Мониторы",
+    "ноутбук": "Ноутбук",
+    "свч": "СВЧ",
+    "холодильник": "Холодильники",
+    "планшет": "Планшет",
+    "духовой шкаф": "Плиты"
+  },
+  "startswith": {
+    "телевизор": "ТВ",
+    "стиральная машин": "Стиральные машины"
+  },
+  "default_passthrough": true,
+  "_default_passthrough_comment": "If a raw category matches neither 'exact' nor 'startswith', it is passed through unchanged as its own group (rather than dropped or lumped into 'Other') so that a brand-new category introduced by the client shows up visibly instead of silently disappearing."
+}

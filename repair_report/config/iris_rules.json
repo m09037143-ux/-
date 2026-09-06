@@ -1,0 +1,7 @@
+{
+  "_comment": "Validity rules for IRIS code combinations (section 8.3, 'Ошибки кодирования IRIS'). Not derivable from a single period of real data -- the July reference period has zero coding errors, so it proves the output *shape* (7 columns: АСЦ, Бренд, Модель, Секция, Дефект, Ремонт, Ошибки) but not the rule set itself. Populate 'invalid_combinations' and/or 'required_fields' as the client's actual IRIS validity rules become known.",
+  "required_fields": [],
+  "_required_fields_comment": "Rows for TV-category repairs missing any field named here are flagged with 'Не заполнен код: <field>'. Left EMPTY on purpose: an earlier draft defaulted this to the 3 IRIS code columns, but that produces false positives against the reference period (July has TV repairs with a genuinely blank 'IRIS код секции' that the reference report does NOT flag as an error -- it reports zero errors for July). Since the real validity rule is unconfirmed, shipping a guessed rule that contradicts the one period of ground truth we have would be worse than reporting nothing. Populate this once the client confirms which fields are actually mandatory.",
+  "invalid_combinations": [],
+  "_invalid_combinations_comment": "Each entry would be {'section': ..., 'defect': ..., 'repair': ..., 'error': '<message>'} to flag a specific known-bad chain. Empty until the client supplies real rules."
+}

@@ -1,0 +1,14 @@
+{
+  "_comment": "Human-readable labels for the 'Уровень ремонта' column codes. Unrecognized codes appearing in a future export are shown as-is (the code itself) rather than causing an error -- see analytics/common.py:label_repair_level().",
+  "AN": "АНР (акт о неремонтопригодности)",
+  "ANR": "АНР (акт о неремонтопригодности)",
+  "TO": "ТО (техническое обслуживание)",
+  "L1": "L1 (простой ремонт)",
+  "L2": "L2 (средний ремонт)",
+  "L3": "L3 (сложный ремонт)",
+  "_anr_codes_comment": "Both 'AN' and 'ANR' are treated as the ANR (non-repairability act) level for the purposes of the ANR-share ratios in section 5.2 -- the July source file uses the short code 'AN', but other periods/exports may use 'ANR'.",
+  "anr_codes": ["AN", "ANR"],
+
+  "missing_level_maps_to": "AN",
+  "_missing_level_comment": "Verified against the reference report (section 3 'По уровням ремонта' table and the 5.2 network-wide ANR share text): a row with a BLANK 'Уровень ремонта' (i.e. a multi-part continuation line, see §1.3) is folded into the ANR bucket, not given its own 'unknown' row. This is a DIFFERENT rule from the one used for АСЦ/Регион/Изготовитель/Бренд/Категория техники, which DO get a dedicated placeholder label instead of being folded into an existing bucket -- verified by exact reproduction of ANR count=699 and sum=999575 (698 'AN' rows + the one blank-level row, whose own amount is 0) and of the network ANR share rounding to 46% (699/1535)."
+}
