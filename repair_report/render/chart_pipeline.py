@@ -51,4 +51,27 @@ def generate_charts(report: ReportData, out_dir: str | Path) -> dict[str, str]:
     # Section 7.1 -- TV diagonals
     bar("section7_1_diagonal", report.tv_diagonal.rows, n=len(report.tv_diagonal.rows))
 
+    # Section 10 -- only when a parts file was supplied (see engine.py)
+    if report.parts is not None and report.parts.has_data_for_window:
+        st = report.parts.status_by_month
+        series = {status: [st.counts[status][m] for m in st.months] for status in st.statuses}
+        status_colors = {
+            "Зарезервирована на складе": "#4682b4",
+            "Отгружена": "#2e7d32",
+            "Отказана менеджером": "#c00000",
+            "Рассматривается": "#e0a800",
+        }
+        p10_1 = out_dir / "section10_1_status.png"
+        cb.stacked_vertical_bar_chart(str(p10_1), st.months, series, series_colors=status_colors)
+        paths["section10_1_status"] = str(p10_1)
+
+        geo = report.parts.geography[:top_n]
+        p10_2 = out_dir / "section10_2_geo.png"
+        cb.threshold_colored_bar_chart(
+            str(p10_2),
+            [r.city for r in geo],
+            [r.fulfillment_pct for r in geo],
+        )
+        paths["section10_2_geo"] = str(p10_2)
+
     return paths

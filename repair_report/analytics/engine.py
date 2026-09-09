@@ -19,6 +19,7 @@ from repair_report.analytics import (
     fraud,
     iris_defects,
     manufacturers,
+    parts,
     registries,
     regions_asc,
     sla_quality,
@@ -30,6 +31,20 @@ from repair_report.analytics.regions_asc import LeaderFollowerText, leader_follo
 from repair_report.analytics.tables import DynamicsTable
 from repair_report.config import loader
 from repair_report.ingest.excel_reader import ColumnReport, load_repair_data
+from repair_report.ingest.parts_reader import PartsColumnReport, load_parts_data
+
+
+@dataclass
+class PartsSection:
+    """Section 10, built from the optional spare-parts file. See
+    analytics/parts.py and docs/REVERSE_ENGINEERING.md §13."""
+
+    column_report: PartsColumnReport
+    window_periods: list[Period]
+    summary: parts.PartsSummary
+    status_by_month: parts.StatusMonthTable
+    geography: list[parts.GeographyRow]
+    has_data_for_window: bool
 
 
 @dataclass
@@ -84,12 +99,23 @@ class ReportData:
     detail_rows: list[dict] = field(repr=False, default_factory=list)
 
     experimental_sections_enabled: bool = False
+    """Gates section 11 (tech support) ALWAYS, and section 10's placeholder
+    when no parts file was provided. Has no effect on section 10 once a
+    parts file IS provided -- that section then always shows its real data,
+    per product decision (see docs/REVERSE_ENGINEERING.md §13)."""
+
+    parts: PartsSection | None = None
+    """Section 10's real data, present only when a parts file was supplied
+    to build_report(). None means section 10 falls back to the old
+    'requires clarification' placeholder (still gated by
+    experimental_sections_enabled, unchanged from before)."""
 
 
 def build_report(
     path: str,
     requested_period_key: str | None = None,
     include_experimental: bool | None = None,
+    parts_path: str | None = None,
 ) -> ReportData:
     df, column_report = load_repair_data(path)
     periods_series = assign_periods(df)
@@ -131,6 +157,19 @@ def build_report(
     defect_texts = iris_defects.defect_text_table(current_df)
     iris_errors = iris_defects.iris_errors_table(current_df)
 
+    parts_section = None
+    if parts_path:
+        parts_df, parts_column_report = load_parts_data(parts_path)
+        window_df, window_periods = parts.period_window_df(parts_df, selection.current, selection.previous)
+        parts_section = PartsSection(
+            column_report=parts_column_report,
+            window_periods=window_periods,
+            summary=parts.compute_summary(window_df),
+            status_by_month=parts.status_by_month_table(window_df, window_periods),
+            geography=parts.geography_table(window_df),
+            has_data_for_window=len(window_df) > 0,
+        )
+
     return ReportData(
         current_period=selection.current,
         previous_period=selection.previous,
@@ -169,4 +208,5 @@ def build_report(
         fraud_rows=fraud.fraud_table(current_df),
         detail_rows=detail.detail_rows(current_df),
         experimental_sections_enabled=experimental_enabled,
+        parts=parts_section,
     )

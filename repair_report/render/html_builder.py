@@ -37,6 +37,34 @@ def _detail_columns():
     return [label for _, label in DETAIL_COLUMNS]
 
 
+def _build_parts_context(report: ReportData) -> dict | None:
+    if report.parts is None:
+        return None
+    p = report.parts
+    window_label = " / ".join(p.window_periods and [str(x) for x in p.window_periods] or []) or "—"
+    if not p.has_data_for_window:
+        return {"has_data": False, "window_label": window_label}
+
+    st = p.status_by_month
+    status_rows = [
+        {"status": s, "vals": [st.counts[s][m] for m in st.months], "total": st.row_totals[s]}
+        for s in st.statuses
+    ]
+    return {
+        "has_data": True,
+        "window_label": window_label,
+        "row_count": format_number(p.summary.row_count),
+        "unique_orders": format_number(p.summary.unique_orders),
+        "total_qty": format_number(p.summary.total_qty_ordered),
+        "leader_follower_text": p.summary.leader_follower_text(),
+        "months": st.months,
+        "status_rows": status_rows,
+        "month_totals": [st.month_totals[m] for m in st.months],
+        "grand_total": st.grand_total,
+        "geography": p.geography,
+    }
+
+
 def build_html(report: ReportData, profile: ClientProfile, work_dir: str | Path, chart_paths: dict[str, str] | None = None) -> str:
     """Returns the rendered HTML as a string.
 
@@ -174,6 +202,7 @@ def build_html(report: ReportData, profile: ClientProfile, work_dir: str | Path,
         iris_errors=report.iris_errors,
         fraud_rows=report.fraud_rows,
         experimental_sections_enabled=report.experimental_sections_enabled,
+        parts=_build_parts_context(report),
         section10_message=SECTION_10_PLACEHOLDER.message,
         section10_columns=SECTION_10_PLACEHOLDER.column_layout,
         section11_message=SECTION_11_PLACEHOLDER.message,

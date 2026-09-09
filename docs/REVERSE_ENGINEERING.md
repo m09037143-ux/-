@@ -300,19 +300,141 @@ rule set for what counts as a "coding error" remains genuinely unknown --
 July simply has none, so the one period of ground truth available proves
 the shape but not the rule.
 
-## §11. Sections 10 (spare parts) and 11 (tech support) -- confirmed NOT derivable from this export
+## §11. Sections 10 (spare parts) and 11 (tech support) -- STATUS UPDATE, see §13
 
-See `repair_report/analytics/parts_support.py`'s module docstring for the
-full evidence trail (row-count mismatches, a status vocabulary that exists
-nowhere in the 38 columns, ASC-naming-convention mismatches, and -- the
-strongest signal -- the preparer's OWN Kosovov pivot workbook, which
-covers every other section in full, has no sheet related to parts or
-support at all). These two sections ship OFF by default
-(`experimental_sections.enabled: false`) and, even when enabled, render as
-an explicit "needs clarification" placeholder rather than fabricated
-numbers. Do not re-open this investigation without a new data source from
-the client -- the `int` column and the ASC-naming mismatch were both
-already run down and are dead ends, not oversights.
+This section originally concluded neither section was derivable from any
+available data. **That conclusion was correct as far as it went and still
+holds for section 11** (tech support) -- see `parts_support.py`'s module
+docstring for the original evidence trail (row-count mismatches, a status
+vocabulary absent from the main export's 38 columns, ASC-naming-convention
+mismatches, and the preparer's own Kosovov pivot workbook covering every
+other section but neither of these). Section 11 remains OFF by default and,
+when the user opts in, still renders only the "needs clarification"
+placeholder -- no ticket/support-shaped data has ever been supplied.
+
+**Section 10 is no longer in that state.** The client subsequently supplied
+a genuinely separate spare-parts logistics export (2026-09-09), which
+turned out to be exactly the missing source this section needed. See §13
+for the full investigation and the now-confirmed formulas. Do not re-open
+the section-11 investigation without a new data source -- the `int` column
+and the ASC-naming mismatch were both already run down there and are dead
+ends, not oversights; they say nothing about section 10, which uses an
+entirely different file.
+
+## §13. Section 10 (spare parts) -- SOLVED, 2026-09-09
+
+### The file
+
+A second, OPTIONAL file (`repair_report/ingest/parts_reader.py`), 1500
+rows / 43 columns, one row per spare-parts order LINE (not per repair). Key
+columns: `Номер заказа` (order id), `Дата отправки заказа` (dispatch
+date -- see below), `Статус линии заказа` (line status), `Заказанный
+партномер` (part number), `Заказано по заявке всего` (quantity ordered on
+this line), `Адрес доставки` (free-text delivery address), `Заказчик` /
+`Код Заказчика` (ASC name/code).
+
+**This is a live operational export, not an immutable historical record**:
+`Статус линии заказа` changes over time as an order gets processed
+(reserved -> shipped, or under review -> rejected). This is the single most
+important thing to understand before touching this module -- see "the one
+expected discrepancy" below.
+
+### Confirming this file belongs to the same business as the main export
+
+- `Заказчик`/`Код Заказчика` (ASC name/code) match the main export's
+  `Наименование АСЦ`/`Код АСЦ` 1:1 for every name that appears in both
+  (107/107 checked) -- same ASC-code numbering system, unlike whatever
+  section 11 would need.
+- The specific part number the ORIGINAL reference DOCX names as July's
+  leader (`Y010123-000232-01V`, "24 шт.") appears in this file too, and (see
+  below) reproduces exactly 24 once the right date field and period window
+  are used -- this cannot be a coincidence.
+
+### The formula (verified exactly against the reference DOCX's section 10 text and tables 24/25)
+
+1. **Period anchor field**: `Дата отправки заказа` (order dispatch date),
+   NOT `Дата создания заказа` or `Дата создания заявки` -- the other two
+   candidates were tried and do not reproduce the reference numbers.
+2. **Period window is TWO months (current + calendar-previous), not one.**
+   This matches the 10.1 table's own two-month-column layout. Filtering
+   `Дата отправки заказа` to June+July 2026 gives EXACTLY: 746 rows (=
+   "Общее количество обработанных строк: 746"), 709 distinct `Номер заказа`
+   (= "Уникальных заказов: 709"), `SUM(Заказано по заявке всего)` = 756 (=
+   "Заказано запчастей (шт): 756"), and grouping by `Заказанный партномер`
+   gives a leader of `Y010123-000232-01V` with count 24 -- all four numbers
+   match the reference simultaneously, which is about as strong a
+   confirmation as this project gets anywhere.
+3. **Leader/laggard tie-break**: same rule as everywhere else in this
+   codebase (earliest first-occurrence among ties) -- consistent, not
+   separately re-derived here.
+4. **10.1 status x month table**: pivot `Статус линии заказа` (rows) x
+   month (columns) + ИТОГО. The 4 canonical statuses (`Зарезервирована на
+   складе`, `Отгружена`, `Отказана менеджером`, `Рассматривается`) are
+   ALWAYS shown as fixed rows even when a status has zero rows this window
+   (verified: the reference shows `Зарезервирована на складе` as a 0/2/2
+   row rather than omitting it) -- this mirrors how churned-out ASCs/
+   regions show count=0 elsewhere rather than disappearing. An unrecognized
+   status value would be appended (sorted, only if it actually occurs) so a
+   future new status doesn't silently vanish from the report.
+5. **10.2 geography table**: group by a city/district label parsed from
+   `Адрес доставки` (see `parts.extract_city` -- municipal-district-within-
+   a-federal-city > `г.о. город X` normalized to `г. X` > the most specific
+   plain `г X`/`г. X` segment found anywhere in the address > the broader
+   `Город X` federal-city label as a fallback). "Отгружено" = count of rows
+   with `line_status == 'Отгружена'` (cross-checked against an alternative
+   `shipped_qty > 0` definition on a sample city; both agreed exactly, so
+   the simpler status-based definition was kept). "Выполнение (%)" =
+   Отгружено/Всего*100, no special rounding.
+   **Accuracy, and the product decision behind it**: this address parser
+   was checked against all 15 rows of the reference's own top-15 table and
+   matches 14 of them EXACTLY (city, total, shipped count, and percentage
+   all identical) -- Волгоград, Краснодар, Челябинск, Ростов-на-Дону,
+   Москва, Омск, Новосибирск, Казань, Ставропольский край, Иркутск,
+   Куркино, Самара, Воронеж, Ижевск. The 15th (Санкт-Петербург) matches on
+   total (27) but is off by one on shipped count (6 vs the reference's 5) --
+   consistent with the same live-status-drift effect described below, not a
+   parsing bug. This level of accuracy (an approximation, not a guaranteed
+   row-for-row match against whatever bespoke address-resolution system the
+   client's own logistics tooling uses) was explicitly discussed with and
+   accepted by the client rather than assumed -- region-level grouping
+   (reusing the already-proven `Регион АСЦ`-style logic) was offered as a
+   more conservative alternative and declined in favor of city-level
+   detail. If a future data set drifts further from this approximation,
+   revisit `extract_city`'s docstring before assuming it's broken.
+
+### The one expected, understood discrepancy: status counts don't match the old report line-for-line
+
+The reference DOCX was generated ~10.08.2026; this parts file is a snapshot
+from ~09.09.2026, a month later. Since `Статус линии заказа` is a LIVE
+field, individual orders' statuses have moved on in that month (e.g. some
+that were `Рассматривается` in August are now `Отгружена` or `Отказана
+менеджером`). The 10.1 table's per-status breakdown for July in this
+snapshot (`Отгружена`: 46, `Отказана менеджером`: 377, `Рассматривается`:
+2, `Зарезервирована на складе`: 0) does NOT match the reference's July
+column (45/363/15/2) even though the MONTH TOTAL matches exactly (425 both
+times) -- individual orders' statuses simply moved between buckets. This is
+correct, expected behavior for a live operational dataset, not a formula
+error -- do not "fix" this by trying to find a date field that freezes the
+status breakdown to match the old snapshot; there isn't one, and doing so
+would make the report show stale statuses instead of current ones.
+
+### Product decisions made while implementing this (see the user's own answers, recorded here for continuity)
+
+- **Section 10 visibility**: shown automatically whenever a parts file is
+  supplied (no separate "show it anyway" toggle) -- the client's explicit
+  choice, given the formula is now confirmed. If no parts file is supplied,
+  section 10 falls back to exactly the old behavior (hidden, or the
+  "requires clarification" placeholder behind the experimental-sections
+  checkbox) -- nothing changes for a user who doesn't have this file yet.
+- **Geography precision**: approximate city-level grouping accepted (see
+  above) over an exact-but-coarser region-level fallback.
+- **Section 11 is untouched by any of this** -- the parts file has zero
+  ticket/support-shaped columns, so there was nothing to investigate there.
+
+Implementation: `repair_report/ingest/parts_reader.py`,
+`repair_report/analytics/parts.py`, `repair_report/config/parts_config.json`,
+wired into `engine.py`'s `build_report(..., parts_path=...)`. Tests:
+`tests/test_parts.py`.
 
 ## §12. Column resolution fuzzy-match cutoff
 

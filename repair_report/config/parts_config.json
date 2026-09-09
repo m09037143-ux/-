@@ -1,0 +1,23 @@
+{
+  "_comment": "Section 10 (spare parts) tunables. See docs/REVERSE_ENGINEERING.md §13 for how every formula here was verified against the reference DOCX using the client's spare-parts logistics export.",
+
+  "period_field": "order_sent_date",
+  "_period_field_comment": "Which date column anchors a row to a reporting period. Verified: 'Дата отправки заказа' (order dispatch date) is the ONLY one of the three candidate date columns that reproduces the reference's exact figures (746 rows / 709 orders / 756 items / leader part 'Y010123-000232-01V'=24 pcs) when the window is the CURRENT + PREVIOUS month combined -- see below.",
+
+  "period_window_months": 2,
+  "_period_window_comment": "Section 10's headline figures and its 10.1 table cover a TWO-month window (current + calendar-previous), not just the current month -- confirmed exactly against the reference (321 June rows + 425 July rows = 746 total). This mirrors the 2-column month layout of the 10.1 table itself.",
+
+  "line_status_order": [
+    "Зарезервирована на складе",
+    "Отгружена",
+    "Отказана менеджером",
+    "Рассматривается"
+  ],
+  "_line_status_order_comment": "Fixed display order for section 10.1's status rows, verified against the reference table (alphabetical, which this list already is). A status value present in the data but NOT in this list is still shown -- appended after these, sorted alphabetically -- rather than silently dropped, so a future new status doesn't disappear from the report.",
+
+  "shipped_status_value": "Отгружена",
+  "_shipped_status_comment": "Section 10.2's 'Отгружено' column counts rows whose line_status equals this value. Cross-checked against an alternative definition (shipped_qty > 0) on a sample city and both agreed exactly, so the simpler status-based definition is used.",
+
+  "top_n_geography": 15,
+  "top_n_parts_ranking": 15
+}

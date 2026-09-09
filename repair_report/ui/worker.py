@@ -8,6 +8,7 @@ from PySide6.QtCore import QObject, Signal
 
 from repair_report.analytics.engine import ReportData, build_report
 from repair_report.ingest.excel_reader import ColumnResolutionError
+from repair_report.ingest.parts_reader import PartsColumnResolutionError
 from repair_report.profile import ClientProfile
 
 
@@ -20,18 +21,19 @@ class ProbeWorker(QObject):
     failed = Signal(str)
     stage = Signal(str)
 
-    def __init__(self, file_path: str):
+    def __init__(self, file_path: str, parts_path: str | None = None):
         super().__init__()
         self.file_path = file_path
+        self.parts_path = parts_path
 
     def run(self):
         try:
             self.stage.emit("Чтение файла…")
             self.stage.emit("Определение периодов…")
-            report = build_report(self.file_path)
+            report = build_report(self.file_path, parts_path=self.parts_path)
             self.stage.emit("Готово")
             self.finished.emit(report)
-        except ColumnResolutionError as e:
+        except (ColumnResolutionError, PartsColumnResolutionError) as e:
             self.failed.emit(str(e))
         except Exception as e:  # noqa: BLE001 -- surface any failure to the user
             self.failed.emit(f"Не удалось обработать файл: {e}")
@@ -54,6 +56,7 @@ class ReportWorker(QObject):
         profile: ClientProfile,
         include_experimental: bool,
         work_dir: str,
+        parts_path: str | None = None,
     ):
         super().__init__()
         self.file_path = file_path
@@ -63,12 +66,13 @@ class ReportWorker(QObject):
         self.profile = profile
         self.include_experimental = include_experimental
         self.work_dir = work_dir
+        self.parts_path = parts_path
 
     def run(self):
         try:
             self.progress.emit("Чтение файла…")
             self.progress.emit("Определение периодов…")
-            report: ReportData = build_report(self.file_path, self.period_key, self.include_experimental)
+            report: ReportData = build_report(self.file_path, self.period_key, self.include_experimental, self.parts_path)
 
             self.progress.emit("Агрегация показателей…")
             # (aggregation already happened inside build_report; this stage

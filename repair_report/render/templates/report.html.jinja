@@ -248,14 +248,57 @@
   {% endfor %}
 </table>
 
-{% if experimental_sections_enabled %}
+{% if parts %}
+<h2 class="page-break">10. Аналитика поставок запасных частей</h2>
+{% if parts.has_data %}
+<ul>
+  <li>Общее количество обработанных строк: {{ parts.row_count }}</li>
+  <li>Уникальных заказов: {{ parts.unique_orders }}</li>
+  <li>Заказано запчастей (шт): {{ parts.total_qty }}</li>
+</ul>
+<p><b>Востребованность запасных частей</b></p>
+<p class="blurb">{{ parts.leader_follower_text }}</p>
+
+<h3>10.1 Структура и статусы заказов</h3>
+<table>
+  <tr><th>Статус линии заказа</th>{% for m in parts.months %}<th>{{ m }}</th>{% endfor %}<th>ИТОГО</th></tr>
+  {% for row in parts.status_rows %}
+  <tr>
+    <td>{{ row.status }}</td>
+    {% for v in row.vals %}<td class="num">{{ v }}</td>{% endfor %}
+    <td class="num">{{ row.total }}</td>
+  </tr>
+  {% endfor %}
+  <tr class="total-row">
+    <td>ИТОГО</td>
+    {% for v in parts.month_totals %}<td class="num">{{ v }}</td>{% endfor %}
+    <td class="num">{{ parts.grand_total }}</td>
+  </tr>
+</table>
+{% if charts.section10_1_status %}<div class="chart"><img src="{{ charts.section10_1_status }}"></div>{% endif %}
+
+<h3>10.2 География поставок</h3>
+<p class="small-note">Город/округ определяется приближённо по тексту адреса доставки — возможны отдельные расхождения при нестандартных адресах.</p>
+<table>
+  <tr><th>Город / Направление</th><th>Всего заявок (строк)</th><th>Отгружено</th><th>Выполнение (%)</th></tr>
+  {% for r in parts.geography %}
+  <tr><td>{{ r.city }}</td><td class="num">{{ r.total }}</td><td class="num">{{ r.shipped }}</td><td class="num">{{ "%.1f"|format(r.fulfillment_pct) }}%</td></tr>
+  {% endfor %}
+</table>
+{% if charts.section10_2_geo %}<div class="chart"><img src="{{ charts.section10_2_geo }}"></div>{% endif %}
+{% else %}
+<p class="placeholder">Файл по запасным частям загружен, но не содержит данных за выбранный период ({{ parts.window_label }}).</p>
+{% endif %}
+{% elif experimental_sections_enabled %}
 <h2 class="page-break">10. Аналитика поставок запасных частей</h2>
 <p class="placeholder">{{ section10_message }}</p>
 <table>
   <tr>{% for c in section10_columns %}<th>{{ c }}</th>{% endfor %}</tr>
 </table>
+{% endif %}
 
-<h2>11. Аналитика Технической Поддержки</h2>
+{% if experimental_sections_enabled %}
+<h2 {% if not parts %}class="page-break"{% endif %}>11. Аналитика Технической Поддержки</h2>
 <p class="placeholder">{{ section11_message }}</p>
 <table>
   <tr>{% for c in section11_columns %}<th>{{ c }}</th>{% endfor %}</tr>

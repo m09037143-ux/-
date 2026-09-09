@@ -301,13 +301,51 @@ def save_docx(
     doc.add_paragraph("Подозрительные совпадения телефонов (накрутка)").bold = True
     _add_table(doc, ["Телефон", "Клиент", "Уникальных аппаратов"], [[r.phone, r.client, r.unique_devices] for r in report.fraud_rows])
 
-    # Sections 10-11 (experimental)
-    if report.experimental_sections_enabled:
+    # Section 10 -- real data when a parts file was supplied, else the
+    # unconfirmed placeholder (gated by experimental_sections_enabled, as before)
+    if report.parts is not None:
+        doc.add_page_break()
+        _heading(doc, "10. Аналитика поставок запасных частей")
+        p = report.parts
+        if p.has_data_for_window:
+            s = p.summary
+            doc.add_paragraph(f"Общее количество обработанных строк: {format_number(s.row_count)}", style="List Bullet")
+            doc.add_paragraph(f"Уникальных заказов: {format_number(s.unique_orders)}", style="List Bullet")
+            doc.add_paragraph(f"Заказано запчастей (шт): {format_number(s.total_qty_ordered)}", style="List Bullet")
+            doc.add_paragraph("Востребованность запасных частей").bold = True
+            doc.add_paragraph(s.leader_follower_text())
+
+            _heading(doc, "10.1 Структура и статусы заказов", level=2)
+            st = p.status_by_month
+            rows = [[status, *[st.counts[status][m] for m in st.months], st.row_totals[status]] for status in st.statuses]
+            rows.append(["ИТОГО", *[st.month_totals[m] for m in st.months], st.grand_total])
+            _add_table(doc, ["Статус линии заказа", *st.months, "ИТОГО"], rows)
+            if "section10_1_status" in charts:
+                doc.add_picture(charts["section10_1_status"], width=Inches(6))
+
+            _heading(doc, "10.2 География поставок", level=2)
+            doc.add_paragraph(
+                "Город/округ определяется приближённо по тексту адреса доставки — возможны отдельные расхождения при нестандартных адресах."
+            ).italic = True
+            _add_table(
+                doc,
+                ["Город / Направление", "Всего заявок (строк)", "Отгружено", "Выполнение (%)"],
+                [[r.city, r.total, r.shipped, f"{r.fulfillment_pct:.1f}%"] for r in p.geography],
+            )
+            if "section10_2_geo" in charts:
+                doc.add_picture(charts["section10_2_geo"], width=Inches(6))
+        else:
+            doc.add_paragraph(f"Файл по запасным частям загружен, но не содержит данных за выбранный период.")
+    elif report.experimental_sections_enabled:
         doc.add_page_break()
         _heading(doc, SECTION_10_PLACEHOLDER.title)
         doc.add_paragraph(SECTION_10_PLACEHOLDER.message)
         _add_table(doc, SECTION_10_PLACEHOLDER.column_layout, [])
 
+    # Section 11 -- still unconfirmed regardless of the parts file (it
+    # covers tech-support tickets, which the parts file does not contain)
+    if report.experimental_sections_enabled:
+        doc.add_page_break()
         _heading(doc, SECTION_11_PLACEHOLDER.title)
         doc.add_paragraph(SECTION_11_PLACEHOLDER.message)
         _add_table(doc, SECTION_11_PLACEHOLDER.column_layout, [])

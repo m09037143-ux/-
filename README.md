@@ -81,14 +81,22 @@ against verified ground truth, not a flaky test.
 
 ## Known limitations / honesty notes
 
-- **Sections 10 and 11 are disabled by default.** The data they'd need
-  (spare-parts order status, support tickets) does not exist in the only
-  input this app is allowed to read, and does not exist in the client's own
-  intermediate pivot workbook either. See
+- **Section 10 (spare parts) now has a real data source.** It's a second,
+  OPTIONAL file the app can load (a spare-parts logistics export, distinct
+  from the main `WR_Consolidated_List_*.xlsx`) -- see
+  `repair_report/ingest/parts_reader.py`, `repair_report/analytics/parts.py`
+  and `docs/REVERSE_ENGINEERING.md` §13 for the fully-verified formula. When
+  that file is supplied, section 10 shows real figures automatically; when
+  it isn't, section 10 behaves exactly as before (hidden, or a "requires
+  clarification" placeholder behind the experimental-sections checkbox).
+- **Section 11 (tech support) is still disabled by default.** No data
+  source for it has ever been supplied -- not the main export, not the
+  client's intermediate pivot workbook, and not the spare-parts file either
+  (it has zero ticket/support-shaped columns). See
   `repair_report/analytics/parts_support.py` and
-  `docs/REVERSE_ENGINEERING.md` §11 for the full evidence. Turning on
-  "Включить экспериментальные разделы" in the UI shows an explicit
-  "requires clarification" placeholder, never fabricated numbers.
+  `docs/REVERSE_ENGINEERING.md` §11 for the evidence. Turning on "Показывать
+  раздел 11" in the UI shows an explicit "requires clarification"
+  placeholder, never fabricated numbers.
 - **The Windows .exe build has not been tested on real Windows** (this was
   built in a Linux sandbox). See `packaging/BUILD.md` for the build steps
   and, especially, the WeasyPrint/GTK native-dependency caveat, which is

@@ -63,6 +63,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(640, 640)
 
         self.file_path: str | None = None
+        self.parts_file_path: str | None = None
         self.report = None  # ReportData for the currently probed file/period
         self.work_dir = tempfile.mkdtemp(prefix="repair_report_")
         self._probe_thread: QThread | None = None
@@ -83,6 +84,21 @@ class MainWindow(QMainWindow):
         self.file_status_label = QLabel("Файл не выбран.")
         file_layout.addWidget(self.file_status_label)
         layout.addWidget(file_group)
+
+        # --- Optional spare-parts file (section 10) ---
+        parts_group = QGroupBox("1.1 Файл по запасным частям (опционально, раздел 10)")
+        parts_layout = QHBoxLayout(parts_group)
+        parts_pick_btn = QPushButton("Выбрать файл…")
+        parts_pick_btn.clicked.connect(self._pick_parts_file)
+        parts_layout.addWidget(parts_pick_btn)
+        self.parts_clear_btn = QPushButton("Очистить")
+        self.parts_clear_btn.setEnabled(False)
+        self.parts_clear_btn.clicked.connect(self._clear_parts_file)
+        parts_layout.addWidget(self.parts_clear_btn)
+        self.parts_file_status_label = QLabel("Не загружен — раздел 10 будет скрыт/помечен как недоступный.")
+        self.parts_file_status_label.setWordWrap(True)
+        parts_layout.addWidget(self.parts_file_status_label, stretch=1)
+        layout.addWidget(parts_group)
 
         # --- Period selection ---
         period_group = QGroupBox("2. Отчётный период")
@@ -110,10 +126,13 @@ class MainWindow(QMainWindow):
         # --- Options ---
         options_group = QGroupBox("4. Настройки отчёта")
         options_layout = QVBoxLayout(options_group)
-        self.experimental_checkbox = QCheckBox("Включить экспериментальные разделы (запчасти/техподдержка)")
+        self.experimental_checkbox = QCheckBox("Показывать раздел 11 (техподдержка) как «требует уточнения»")
         self.experimental_checkbox.setToolTip(
-            "Логика разделов 10-11 не подтверждена доступной выгрузкой (см. README) — "
-            "по умолчанию отключено, чтобы не показывать недостоверные цифры."
+            "Логика раздела 11 (техподдержка) не подтверждена ни одной доступной выгрузкой — "
+            "по умолчанию раздел скрыт, чтобы не показывать недостоверные цифры. Раздел 10 "
+            "(запчасти) в этот чекбокс больше не входит — он показывается автоматически, когда "
+            "загружен файл по запасным частям (см. пункт 1.1), и как прежде скрыт/помечен как "
+            "недоступный, если файл не загружен."
         )
         options_layout.addWidget(self.experimental_checkbox)
         layout.addWidget(options_group)
@@ -177,6 +196,22 @@ class MainWindow(QMainWindow):
         if path:
             self._load_file(path)
 
+    def _pick_parts_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Выберите файл по запасным частям", "", "Excel (*.xlsx *.xlsm)")
+        if path:
+            self.parts_file_path = path
+            self.parts_file_status_label.setText(f"Загружен: {os.path.basename(path)}")
+            self.parts_clear_btn.setEnabled(True)
+            if self.file_path:
+                self._load_file(self.file_path)  # re-probe so section 10 data is included
+
+    def _clear_parts_file(self):
+        self.parts_file_path = None
+        self.parts_file_status_label.setText("Не загружен — раздел 10 будет скрыт/помечен как недоступный.")
+        self.parts_clear_btn.setEnabled(False)
+        if self.file_path:
+            self._load_file(self.file_path)
+
     def _load_file(self, path: str):
         self.file_path = path
         self.file_status_label.setText(f"Загрузка: {os.path.basename(path)}…")
@@ -184,7 +219,7 @@ class MainWindow(QMainWindow):
         self.period_combo.setEnabled(False)
 
         self._probe_thread = QThread()
-        self._probe_worker = ProbeWorker(path)
+        self._probe_worker = ProbeWorker(path, self.parts_file_path)
         self._probe_worker.moveToThread(self._probe_thread)
         self._probe_thread.started.connect(self._probe_worker.run)
         self._probe_worker.finished.connect(self._on_probe_finished)
@@ -207,11 +242,27 @@ class MainWindow(QMainWindow):
         self.period_combo.blockSignals(False)
         self.period_combo.setEnabled(True)
         self._update_previous_period_label(report)
+        self._update_parts_status_label(report)
         self.generate_btn.setEnabled(True)
 
     def _on_probe_failed(self, message: str):
         self.file_status_label.setText("Не удалось прочитать файл.")
         QMessageBox.critical(self, "Ошибка чтения файла", message)
+
+    def _update_parts_status_label(self, report):
+        if report.parts is None:
+            return  # no parts file selected -- leave the static label as-is
+        if report.parts.has_data_for_window:
+            s = report.parts.summary
+            self.parts_file_status_label.setText(
+                f"Загружен: {os.path.basename(self.parts_file_path)} — за выбранный период найдено "
+                f"{s.row_count} строк / {s.unique_orders} заказов."
+            )
+        else:
+            window = " и ".join(str(p) for p in report.parts.window_periods)
+            self.parts_file_status_label.setText(
+                f"Загружен: {os.path.basename(self.parts_file_path)} — ⚠ нет данных за {window}."
+            )
 
     def _update_previous_period_label(self, report):
         if report.previous_available:
@@ -232,8 +283,11 @@ class MainWindow(QMainWindow):
         from repair_report.analytics.engine import build_report
 
         try:
-            self.report = build_report(self.file_path, period_key, self.experimental_checkbox.isChecked())
+            self.report = build_report(
+                self.file_path, period_key, self.experimental_checkbox.isChecked(), self.parts_file_path
+            )
             self._update_previous_period_label(self.report)
+            self._update_parts_status_label(self.report)
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "Ошибка", f"Не удалось пересчитать период: {e}")
 
@@ -272,6 +326,7 @@ class MainWindow(QMainWindow):
             self._current_profile(),
             self.experimental_checkbox.isChecked(),
             self.work_dir,
+            self.parts_file_path,
         )
         self._report_worker.moveToThread(self._report_thread)
         self._report_thread.started.connect(self._report_worker.run)
