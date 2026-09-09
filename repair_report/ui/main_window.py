@@ -101,15 +101,9 @@ class MainWindow(QMainWindow):
             "Перетащите файл по запасным частям сюда\nили нажмите «Выбрать файл»",
         )
         parts_col.addWidget(self.parts_drop_area)
-        parts_btn_row = QHBoxLayout()
         parts_pick_btn = QPushButton("Выбрать файл…")
         parts_pick_btn.clicked.connect(self._pick_parts_file)
-        parts_btn_row.addWidget(parts_pick_btn)
-        self.parts_clear_btn = QPushButton("Очистить")
-        self.parts_clear_btn.setEnabled(False)
-        self.parts_clear_btn.clicked.connect(self._clear_parts_file)
-        parts_btn_row.addWidget(self.parts_clear_btn)
-        parts_col.addLayout(parts_btn_row)
+        parts_col.addWidget(parts_pick_btn)
         self.parts_file_status_label = QLabel("Файл не выбран — раздел 10 будет скрыт, пока не загружен.")
         self.parts_file_status_label.setWordWrap(True)
         parts_col.addWidget(self.parts_file_status_label)
@@ -221,16 +215,8 @@ class MainWindow(QMainWindow):
     def _load_parts_file(self, path: str):
         self.parts_file_path = path
         self.parts_file_status_label.setText(f"Загружен: {os.path.basename(path)}")
-        self.parts_clear_btn.setEnabled(True)
         if self.file_path:
             self._load_file(self.file_path)  # re-probe so section 10 data is included
-
-    def _clear_parts_file(self):
-        self.parts_file_path = None
-        self.parts_file_status_label.setText("Файл не выбран — раздел 10 будет скрыт, пока не загружен.")
-        self.parts_clear_btn.setEnabled(False)
-        if self.file_path:
-            self._load_file(self.file_path)
 
     def _load_file(self, path: str):
         self.file_path = path
