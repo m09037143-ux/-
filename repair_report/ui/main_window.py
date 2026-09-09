@@ -34,8 +34,8 @@ logger = logging.getLogger(__name__)
 
 
 class DropArea(QLabel):
-    def __init__(self, on_file_dropped):
-        super().__init__("Перетащите файл WR_Consolidated_List_*.xlsx сюда\nили нажмите «Выбрать файл»")
+    def __init__(self, on_file_dropped, placeholder_text: str = "Перетащите файл .xlsx сюда\nили нажмите «Выбрать файл»"):
+        super().__init__(placeholder_text)
         self.setAlignment(Qt.AlignCenter)
         self.setMinimumHeight(90)
         self.setStyleSheet("border: 2px dashed #888; border-radius: 8px; padding: 12px; color: #555;")
@@ -73,32 +73,49 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
 
-        # --- File selection ---
-        file_group = QGroupBox("1. Исходный файл")
-        file_layout = QVBoxLayout(file_group)
-        self.drop_area = DropArea(self._load_file)
-        file_layout.addWidget(self.drop_area)
+        # --- File selection: two PARALLEL, equal-weight inputs that together
+        # feed one report (not a "main file + optional extra" hierarchy --
+        # see docs/REVERSE_ENGINEERING.md §13's product-decision note) ---
+        files_group = QGroupBox("1. Файлы для отчёта")
+        files_row = QHBoxLayout(files_group)
+
+        main_col = QVBoxLayout()
+        main_col.addWidget(QLabel("Выгрузка ремонтов (WR_Consolidated_List_*.xlsx)"))
+        self.drop_area = DropArea(
+            self._load_file,
+            "Перетащите файл выгрузки ремонтов сюда\nили нажмите «Выбрать файл»",
+        )
+        main_col.addWidget(self.drop_area)
         pick_btn = QPushButton("Выбрать файл…")
         pick_btn.clicked.connect(self._pick_file)
-        file_layout.addWidget(pick_btn)
+        main_col.addWidget(pick_btn)
         self.file_status_label = QLabel("Файл не выбран.")
-        file_layout.addWidget(self.file_status_label)
-        layout.addWidget(file_group)
+        self.file_status_label.setWordWrap(True)
+        main_col.addWidget(self.file_status_label)
+        files_row.addLayout(main_col)
 
-        # --- Optional spare-parts file (section 10) ---
-        parts_group = QGroupBox("1.1 Файл по запасным частям (опционально, раздел 10)")
-        parts_layout = QHBoxLayout(parts_group)
+        parts_col = QVBoxLayout()
+        parts_col.addWidget(QLabel("Выгрузка по запасным частям (раздел 10)"))
+        self.parts_drop_area = DropArea(
+            self._load_parts_file,
+            "Перетащите файл по запасным частям сюда\nили нажмите «Выбрать файл»",
+        )
+        parts_col.addWidget(self.parts_drop_area)
+        parts_btn_row = QHBoxLayout()
         parts_pick_btn = QPushButton("Выбрать файл…")
         parts_pick_btn.clicked.connect(self._pick_parts_file)
-        parts_layout.addWidget(parts_pick_btn)
+        parts_btn_row.addWidget(parts_pick_btn)
         self.parts_clear_btn = QPushButton("Очистить")
         self.parts_clear_btn.setEnabled(False)
         self.parts_clear_btn.clicked.connect(self._clear_parts_file)
-        parts_layout.addWidget(self.parts_clear_btn)
-        self.parts_file_status_label = QLabel("Не загружен — раздел 10 будет скрыт/помечен как недоступный.")
+        parts_btn_row.addWidget(self.parts_clear_btn)
+        parts_col.addLayout(parts_btn_row)
+        self.parts_file_status_label = QLabel("Файл не выбран — раздел 10 будет скрыт, пока не загружен.")
         self.parts_file_status_label.setWordWrap(True)
-        parts_layout.addWidget(self.parts_file_status_label, stretch=1)
-        layout.addWidget(parts_group)
+        parts_col.addWidget(self.parts_file_status_label)
+        files_row.addLayout(parts_col)
+
+        layout.addWidget(files_group)
 
         # --- Period selection ---
         period_group = QGroupBox("2. Отчётный период")
@@ -131,8 +148,8 @@ class MainWindow(QMainWindow):
             "Логика раздела 11 (техподдержка) не подтверждена ни одной доступной выгрузкой — "
             "по умолчанию раздел скрыт, чтобы не показывать недостоверные цифры. Раздел 10 "
             "(запчасти) в этот чекбокс больше не входит — он показывается автоматически, когда "
-            "загружен файл по запасным частям (см. пункт 1.1), и как прежде скрыт/помечен как "
-            "недоступный, если файл не загружен."
+            "загружена выгрузка по запасным частям (см. блок «1. Файлы для отчёта»), и как прежде "
+            "скрыт, если этот файл не загружен."
         )
         options_layout.addWidget(self.experimental_checkbox)
         layout.addWidget(options_group)
@@ -199,15 +216,18 @@ class MainWindow(QMainWindow):
     def _pick_parts_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Выберите файл по запасным частям", "", "Excel (*.xlsx *.xlsm)")
         if path:
-            self.parts_file_path = path
-            self.parts_file_status_label.setText(f"Загружен: {os.path.basename(path)}")
-            self.parts_clear_btn.setEnabled(True)
-            if self.file_path:
-                self._load_file(self.file_path)  # re-probe so section 10 data is included
+            self._load_parts_file(path)
+
+    def _load_parts_file(self, path: str):
+        self.parts_file_path = path
+        self.parts_file_status_label.setText(f"Загружен: {os.path.basename(path)}")
+        self.parts_clear_btn.setEnabled(True)
+        if self.file_path:
+            self._load_file(self.file_path)  # re-probe so section 10 data is included
 
     def _clear_parts_file(self):
         self.parts_file_path = None
-        self.parts_file_status_label.setText("Не загружен — раздел 10 будет скрыт/помечен как недоступный.")
+        self.parts_file_status_label.setText("Файл не выбран — раздел 10 будет скрыт, пока не загружен.")
         self.parts_clear_btn.setEnabled(False)
         if self.file_path:
             self._load_file(self.file_path)
