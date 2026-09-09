@@ -130,6 +130,26 @@ Implementation: `repair_report/analytics/common.py`
 (`add_equipment_category_group`), `repair_report/analytics/tv_analysis.py`
 (`_diagonal_label_from_row`).
 
+**Update, 2026-09-09 -- the `"nan"` row itself is now dropped from section
+3.** The finding above (and §1's continuation-row rule) still stands: a
+blank category resolves to `"nan"` in `equipment_category_group()`, and
+that's still the right underlying classification. What changed is what
+section 3 DOES with rows that resolve to `"nan"`: the July reference report
+literally shows a `nan` line in its category tables, and the original
+implementation reproduced that exactly (verified: count 1, sum 0 ₽,
+matching the DOCX 1:1). After hands-on testing against real August data,
+the client explicitly asked for that row to be removed -- it reads as a
+meaningless artifact, not a real equipment type, in day-to-day use even
+though it happened to match the one reference month available during
+development. `repair_report/analytics/categories.py` now filters `"nan"`
+rows out of both category tables (and their own ИТОГ, and the section-3
+chart) before building them. This is a deliberate, client-directed
+divergence from the literal July DOCX for this one row -- not a mistake in
+the earlier verification -- and does not touch any other section (overall
+KPI counts, and the ASC/region/manufacturer/brand placeholder labels from
+§1, are unaffected). See `categories.py`'s module docstring and
+`tests/test_categories.py` for the updated expectations.
+
 ## §4. Tie-break order for group ranking tables -- two DIFFERENT, both confirmed, rules
 
 When two groups in a ranking table (sections 3/4/6/7) share the same value
