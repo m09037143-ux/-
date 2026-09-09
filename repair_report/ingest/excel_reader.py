@@ -104,7 +104,6 @@ def _resolve_columns(raw_headers: list[str]) -> ColumnReport:
     normalized_to_raw: dict[str, str] = {}
     for raw in raw_headers:
         normalized_to_raw.setdefault(_normalize_header(raw), raw)
-    normalized_pool = list(normalized_to_raw.keys())
 
     used_raw: set[str] = set()
     for key, (expected_header, critical) in CANONICAL_COLUMNS.items():

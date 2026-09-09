@@ -85,7 +85,6 @@ def pie_chart(
     """Section 2 cost-structure pie: Услуги / Выезды / Запчасти shares."""
     fig, ax = plt.subplots(figsize=(6, 5), dpi=DPI)
     colors = _color_cycle(len(labels))
-    total = sum(values) or 1
     wedges, _texts, autotexts = ax.pie(
         values,
         colors=colors,

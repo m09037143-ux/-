@@ -44,7 +44,6 @@ def iris_chain_table(current_df: pd.DataFrame, top_n: int | None = None) -> tupl
     tv["chain"] = tv["iris_section_code"] + " → " + tv["iris_defect_code"] + " → " + tv["iris_repair_code"]
 
     first_seen_order = list(dict.fromkeys(tv["chain"]))
-    rank = {c: i for i, c in enumerate(first_seen_order)}
     counts = tv.groupby("chain", sort=False).size().reindex(first_seen_order)
     counts = counts.sort_values(ascending=False, kind="mergesort")
 
@@ -70,7 +69,6 @@ def defect_text_table(current_df: pd.DataFrame, top_n: int | None = None, case_i
     display = texts if not case_insensitive else texts  # display uses original casing of first occurrence
 
     first_seen_order = list(dict.fromkeys(key))
-    rank = {k: i for i, k in enumerate(first_seen_order)}
     first_display = dict(zip(key, display)) if case_insensitive else None
 
     counts = key.value_counts()

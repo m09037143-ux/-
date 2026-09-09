@@ -335,7 +335,7 @@ def save_docx(
             if "section10_2_geo" in charts:
                 doc.add_picture(charts["section10_2_geo"], width=Inches(6))
         else:
-            doc.add_paragraph(f"Файл по запасным частям загружен, но не содержит данных за выбранный период.")
+            doc.add_paragraph("Файл по запасным частям загружен, но не содержит данных за выбранный период.")
     elif report.experimental_sections_enabled:
         doc.add_page_break()
         _heading(doc, SECTION_10_PLACEHOLDER.title)

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from repair_report.analytics.common import fill_missing_categoricals, repair_level_code, safe_share_pct
+from repair_report.analytics.common import fill_missing_categoricals, repair_level_code
 from repair_report.config import loader
 
 IRIS_FIELDS = ["iris_section_code", "iris_defect_code", "iris_repair_code"]

@@ -11,8 +11,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-import pandas as pd
-
 from repair_report.analytics import (
     categories,
     detail,
