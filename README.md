@@ -52,8 +52,12 @@ tests/
                       Kosovov workbook.
 
 packaging/
-  repair_report.spec  PyInstaller build spec (must be run ON Windows).
-  BUILD.md            Build steps + the WeasyPrint/GTK caveat.
+  repair_report_onefile.spec  PyInstaller build spec -- single-file .exe
+                               (default recommendation; must be run ON Windows).
+  repair_report.spec          PyInstaller build spec -- onedir (folder) build,
+                               kept for debugging/startup-speed cases.
+  BUILD.md                    Build steps, onefile vs. onedir trade-off, and
+                               the WeasyPrint/GTK caveat.
 
 main.py               Entry point (`python main.py`, and what PyInstaller freezes).
 ```
@@ -99,10 +103,17 @@ against verified ground truth, not a flaky test.
   source's `Кто ответил` column is 100% empty, and the reference report's
   own raw XML confirms it has no table there either -- reproducing that
   absence is correct, not a gap. See `docs/REVERSE_ENGINEERING.md` §14.
-- **The Windows .exe build has not been tested on real Windows** (this was
-  built in a Linux sandbox). See `packaging/BUILD.md` for the build steps
-  and, especially, the WeasyPrint/GTK native-dependency caveat, which is
-  the most likely thing to need attention on a real Windows box.
+- **The Windows .exe build has not been run on real Windows.** Two
+  PyInstaller specs are provided -- `repair_report_onefile.spec` (single
+  `.exe`, the default recommendation) and `repair_report.spec` (onedir
+  folder build). The onefile spec's packaging *logic* was validated in the
+  Linux sandbox this was built in (frozen bundle correctly resolves its
+  config/templates/WeasyPrint data files and reproduces byte-for-byte
+  equivalent HTML/PDF/DOCX output to a from-source run), but that only
+  proves what's bundled and how paths resolve when frozen -- it does not
+  touch the Windows-specific risk. See `packaging/BUILD.md` for the build
+  steps and, especially, the WeasyPrint/GTK native-dependency caveat,
+  which is the most likely thing to need attention on a real Windows box.
 - A few very-fine-grained tie-break orderings (the bottom two rows of the
   15-row DOA table; the one specific TV-model "laggard" name in section
   7.2's narrative blurb) could not be reverse-engineered to an exact rule
