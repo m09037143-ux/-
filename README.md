@@ -81,22 +81,24 @@ against verified ground truth, not a flaky test.
 
 ## Known limitations / honesty notes
 
-- **Section 10 (spare parts) now has a real data source.** It's a second,
-  OPTIONAL file the app can load (a spare-parts logistics export, distinct
-  from the main `WR_Consolidated_List_*.xlsx`) -- see
-  `repair_report/ingest/parts_reader.py`, `repair_report/analytics/parts.py`
-  and `docs/REVERSE_ENGINEERING.md` §13 for the fully-verified formula. When
-  that file is supplied, section 10 shows real figures automatically; when
-  it isn't, section 10 behaves exactly as before (hidden, or a "requires
-  clarification" placeholder behind the experimental-sections checkbox).
-- **Section 11 (tech support) is still disabled by default.** No data
-  source for it has ever been supplied -- not the main export, not the
-  client's intermediate pivot workbook, and not the spare-parts file either
-  (it has zero ticket/support-shaped columns). See
-  `repair_report/analytics/parts_support.py` and
-  `docs/REVERSE_ENGINEERING.md` §11 for the evidence. Turning on "Показывать
-  раздел 11" in the UI shows an explicit "requires clarification"
-  placeholder, never fabricated numbers.
+- **Sections 10 (spare parts) and 11 (tech support) both have real data
+  sources now.** Each is a second/third OPTIONAL file the app can load,
+  distinct from the main `WR_Consolidated_List_*.xlsx` -- see
+  `repair_report/ingest/parts_reader.py` + `repair_report/analytics/parts.py`
+  (`docs/REVERSE_ENGINEERING.md` §13) for spare parts, and
+  `repair_report/ingest/support_reader.py` + `repair_report/analytics/support.py`
+  (`docs/REVERSE_ENGINEERING.md` §14) for tech support. The UI presents
+  three equal-weight, parallel drag-and-drop windows (main / parts /
+  support); whichever of the optional files are supplied, that section's
+  real figures appear automatically -- no checkboxes anywhere. A section
+  whose file wasn't supplied is simply omitted from the report, nothing
+  fabricated in its place. Loading all three files produces the full
+  12-section report in one pass.
+- **Section 11.2 "Инженеры поддержки" is intentionally left as a bare
+  subheading with an explanatory note, never a table.** The tech-support
+  source's `Кто ответил` column is 100% empty, and the reference report's
+  own raw XML confirms it has no table there either -- reproducing that
+  absence is correct, not a gap. See `docs/REVERSE_ENGINEERING.md` §14.
 - **The Windows .exe build has not been tested on real Windows** (this was
   built in a Linux sandbox). See `packaging/BUILD.md` for the build steps
   and, especially, the WeasyPrint/GTK native-dependency caveat, which is

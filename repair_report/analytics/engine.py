@@ -22,14 +22,15 @@ from repair_report.analytics import (
     regions_asc,
     sla_quality,
     summary,
+    support,
     tv_analysis,
 )
 from repair_report.analytics.periods import Period, PeriodSelection, assign_periods, available_periods, select_periods
 from repair_report.analytics.regions_asc import LeaderFollowerText, leader_follower_from_dynamics, leader_follower_from_visits
 from repair_report.analytics.tables import DynamicsTable
-from repair_report.config import loader
 from repair_report.ingest.excel_reader import ColumnReport, load_repair_data
 from repair_report.ingest.parts_reader import PartsColumnReport, load_parts_data
+from repair_report.ingest.support_reader import SupportColumnReport, load_support_data
 
 
 @dataclass
@@ -42,6 +43,20 @@ class PartsSection:
     summary: parts.PartsSummary
     status_by_month: parts.StatusMonthTable
     geography: list[parts.GeographyRow]
+    has_data_for_window: bool
+
+
+@dataclass
+class SupportSection:
+    """Section 11, built from the optional tech-support ticket file. See
+    analytics/support.py and docs/REVERSE_ENGINEERING.md §14."""
+
+    column_report: SupportColumnReport
+    window_periods: list[Period]
+    summary: support.SupportSummary
+    organizations: list[support.OrgRow]
+    topics: list[support.TopicRow]
+    quality_audit: list[support.QualityAuditRow]
     has_data_for_window: bool
 
 
@@ -96,24 +111,24 @@ class ReportData:
 
     detail_rows: list[dict] = field(repr=False, default_factory=list)
 
-    experimental_sections_enabled: bool = False
-    """Gates section 11 (tech support) ALWAYS, and section 10's placeholder
-    when no parts file was provided. Has no effect on section 10 once a
-    parts file IS provided -- that section then always shows its real data,
-    per product decision (see docs/REVERSE_ENGINEERING.md §13)."""
-
     parts: PartsSection | None = None
     """Section 10's real data, present only when a parts file was supplied
-    to build_report(). None means section 10 falls back to the old
-    'requires clarification' placeholder (still gated by
-    experimental_sections_enabled, unchanged from before)."""
+    to build_report(). None means section 10 is simply omitted from the
+    report -- no checkbox, no placeholder text (see
+    docs/REVERSE_ENGINEERING.md §13)."""
+
+    support: SupportSection | None = None
+    """Section 11's real data, present only when a tech-support ticket file
+    was supplied to build_report(). None means section 11 is simply omitted
+    from the report, same pattern as `parts` above (see
+    docs/REVERSE_ENGINEERING.md §14)."""
 
 
 def build_report(
     path: str,
     requested_period_key: str | None = None,
-    include_experimental: bool | None = None,
     parts_path: str | None = None,
+    support_path: str | None = None,
 ) -> ReportData:
     df, column_report = load_repair_data(path)
     periods_series = assign_periods(df)
@@ -128,11 +143,6 @@ def build_report(
 
     current_df = df[periods_series == selection.current]
     previous_df = df[periods_series == selection.previous] if selection.previous_available else None
-
-    settings = loader.app_settings()
-    experimental_enabled = (
-        include_experimental if include_experimental is not None else settings["experimental_sections"]["enabled"]
-    )
 
     kpis = summary.compute_summary(current_df)
     kpis_prev = summary.compute_summary(previous_df) if previous_df is not None else None
@@ -166,6 +176,20 @@ def build_report(
             status_by_month=parts.status_by_month_table(window_df, window_periods),
             geography=parts.geography_table(window_df),
             has_data_for_window=len(window_df) > 0,
+        )
+
+    support_section = None
+    if support_path:
+        support_df, support_column_report = load_support_data(support_path)
+        sup_window_df, sup_window_periods = support.period_window_df(support_df, selection.current, selection.previous)
+        support_section = SupportSection(
+            column_report=support_column_report,
+            window_periods=sup_window_periods,
+            summary=support.compute_summary(sup_window_df),
+            organizations=support.organizations_table(sup_window_df),
+            topics=support.topics_table(sup_window_df),
+            quality_audit=support.quality_audit_table(sup_window_df),
+            has_data_for_window=len(sup_window_df) > 0,
         )
 
     return ReportData(
@@ -205,6 +229,6 @@ def build_report(
         iris_errors=iris_errors,
         fraud_rows=fraud.fraud_table(current_df),
         detail_rows=detail.detail_rows(current_df),
-        experimental_sections_enabled=experimental_enabled,
         parts=parts_section,
+        support=support_section,
     )

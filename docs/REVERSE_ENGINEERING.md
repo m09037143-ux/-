@@ -436,6 +436,120 @@ Implementation: `repair_report/ingest/parts_reader.py`,
 wired into `engine.py`'s `build_report(..., parts_path=...)`. Tests:
 `tests/test_parts.py`.
 
+## §14. Section 11 (tech support) -- SOLVED, 2026-09-10
+
+Like section 10, a dedicated tech-support ticket export
+(`Техподдержка_100926.xlsx`, 672 rows x 16 columns) was supplied after the
+original report shipped. It went through the same treatment: every
+candidate formula checked directly against the reference DOCX's tables
+26/27/28 and narrative text, nothing assumed.
+
+### Period field and window
+
+Same 2-month-window pattern as section 10: `Дата создания` (ticket
+creation date) is the period field, and the window is the requested month
+PLUS the calendar-previous month combined (not just the current month
+alone) -- confirmed the same way, by trying the single-month window first,
+getting the wrong ticket count, then trying the 2-month window and getting
+an exact match (287).
+
+### 11 "Всего поступило заявок (тикетов)" and leader/laggard
+
+`ticket_count` = row count of the 2-month window: 287, exact match.
+`closed_share_pct` = share of rows whose `Статус` is one of the
+closed-family statuses (`config/support_config.json`'s
+`closed_statuses`: Оценен / Запрос закрыт (ожидает оценки АСЦ) / Отмена
+АСЦ / Отменён провайдером) -- see the live-field caveat below for why this
+number legitimately does NOT match the reference's 44.6%.
+
+Leader/follower blurb: grouping by `Организация` (АСЦ name), count desc,
+"Абсолютным лидером является Сервисный центр VPS (30 шт.)" -- exact match,
+including the count. The laggard side (count=1) matches on COUNT but not
+on which of several tied organizations is named, same documented
+tie-break ambiguity as elsewhere in this project (earliest first-occurrence
+in the data; the reference names "СЦ Клён", ours doesn't guarantee that
+specific one) -- not chased further, consistent with how every other
+count=1 tie has been handled in this codebase.
+
+### 11.1 Top-15 АСЦ by ticket volume
+
+Group by `Организация`, count desc, top 15. Counts match the reference
+EXACTLY for every row: [30, 14, 14, 13, 13, 9, 8, 8, 8, 7, 7, 7, 7, 6, 6].
+
+### 11.2 "Инженеры поддержки" -- confirmed intentionally absent
+
+The `Кто ответил` column is 100% empty across all 672 rows of the source
+file -- there is no "who answered" data to build a table from. Before
+concluding this section should just be skipped, the reference DOCX's own
+raw OOXML was inspected directly (walking `d.element.body` via
+`docx.oxml.ns.qn`, not just eyeballing the rendered page) to check whether
+the reference report has a table here that we'd be failing to reproduce.
+It does not -- the reference has only the bare "11.2 Инженеры поддержки"
+subheading with no table beneath it. So the source data's emptiness isn't
+a gap to work around; it's the same condition the original report's author
+faced. Implemented as a bare subheading plus an explanatory note (not a
+placeholder asking for more data, since no more data would help -- the
+column itself is unpopulated), the note doubling as documentation of *why*
+in the rendered report itself.
+
+### 11.3 Ticket distribution by topic
+
+Group by `Тема`, count desc. All 14 checked reference values match exactly
+(Вопрос по ремонту: 63, Проблемы с заказом з/ч: 40, ... техническая
+поддержка: 8).
+
+### 11.4 Quality audit of ticket fields
+
+Fill-rate table over `config/support_config.json`'s `quality_audit_fields`
+(Серийный номер / Модель / Бренд / Шасси / Тема обращения). Matches the
+reference exactly for all 5 fields, including the distinctive partial-fill
+one: Шасси = 8 filled / 279 missing / 3% (rounded from 2.79%).
+
+### The one expected, understood discrepancy: `Статус`-derived numbers drift, counts don't
+
+Same pattern as section 10's `Статус линии заказа`. The reference DOCX was
+generated ~10.08.2026; this file is a snapshot from ~09.09.2026, a month
+later. `Статус` is a LIVE field, so the closed-ticket share has legitimately
+moved on as tickets got resolved in the intervening month: the reference
+shows 44.6% closed, this snapshot shows ~97.9% closed for the same window.
+The ticket COUNT (287) and every count-based table (11.1, 11.3, 11.4, the
+leader/laggard blurb) do not depend on a mutable field and match exactly.
+This is correct, expected behavior for a live operational dataset -- not a
+formula error, and there's no date field that would "freeze" the status
+breakdown to reproduce the old snapshot.
+
+### Product decisions made while implementing this
+
+- **Section 11 visibility**: shown automatically whenever a tech-support
+  file is supplied -- no checkbox, mirroring section 10's decision exactly
+  (the user's explicit instruction this round: "Убери галочку для показа 11
+  раздела" / remove the checkbox for showing section 11). If no
+  tech-support file is supplied, section 11 is omitted entirely, same as
+  section 10 with no parts file.
+- **Three parallel file-drop windows**: the main repair export, the parts
+  file, and the tech-support file are three equal-weight, independently
+  droppable inputs feeding one report -- not a "main file plus optional
+  extras" hierarchy. Loading all three produces the full report (sections
+  10 and 11 both populated with real data); loading fewer just narrows
+  which sections have data, with no gating checkboxes anywhere in the flow.
+- **QThread lifetime bug found and fixed while verifying this end-to-end
+  through the actual GUI** (not just via direct `build_report()` calls):
+  dropping the second and third files in quick succession re-probes the
+  main file each time, and each re-probe created a fresh, unparented
+  `QThread()` assigned over the previous one. If the prior thread's C++
+  object hadn't fully stopped by the time Python's last reference to it was
+  dropped, the process aborted (`QThread: Destroyed while thread '' is
+  still running`). Fixed by parenting probe/report `QThread`s to the main
+  window (`QThread(self)`) and wiring `thread.finished.connect(thread.deleteLater)`,
+  so Qt's own parent/child ownership -- not Python refcounting -- governs
+  when the C++ thread object is actually freed. See
+  `repair_report/ui/main_window.py`'s `_load_file` and `_generate_report`.
+
+Implementation: `repair_report/ingest/support_reader.py`,
+`repair_report/analytics/support.py`, `repair_report/config/support_config.json`,
+wired into `engine.py`'s `build_report(..., support_path=...)`. Tests:
+`tests/test_support.py`.
+
 ## §12. Column resolution fuzzy-match cutoff
 
 `difflib.get_close_matches` needs a cutoff high enough to avoid false

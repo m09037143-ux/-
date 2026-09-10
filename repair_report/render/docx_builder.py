@@ -16,7 +16,6 @@ from docx.shared import Inches, Pt, RGBColor
 from repair_report.analytics.common import format_dynamics, format_number, format_rub, repair_level_label
 from repair_report.analytics.detail import DETAIL_COLUMNS
 from repair_report.analytics.engine import ReportData
-from repair_report.analytics.parts_support import SECTION_10_PLACEHOLDER, SECTION_11_PLACEHOLDER
 from repair_report.config import loader
 from repair_report.profile import ClientProfile
 from repair_report.render.chart_pipeline import generate_charts
@@ -301,8 +300,7 @@ def save_docx(
     doc.add_paragraph("Подозрительные совпадения телефонов (накрутка)").bold = True
     _add_table(doc, ["Телефон", "Клиент", "Уникальных аппаратов"], [[r.phone, r.client, r.unique_devices] for r in report.fraud_rows])
 
-    # Section 10 -- real data when a parts file was supplied, else the
-    # unconfirmed placeholder (gated by experimental_sections_enabled, as before)
+    # Section 10 -- real data when a parts file was supplied, else omitted entirely
     if report.parts is not None:
         doc.add_page_break()
         _heading(doc, "10. Аналитика поставок запасных частей")
@@ -336,19 +334,43 @@ def save_docx(
                 doc.add_picture(charts["section10_2_geo"], width=Inches(6))
         else:
             doc.add_paragraph("Файл по запасным частям загружен, но не содержит данных за выбранный период.")
-    elif report.experimental_sections_enabled:
-        doc.add_page_break()
-        _heading(doc, SECTION_10_PLACEHOLDER.title)
-        doc.add_paragraph(SECTION_10_PLACEHOLDER.message)
-        _add_table(doc, SECTION_10_PLACEHOLDER.column_layout, [])
 
-    # Section 11 -- still unconfirmed regardless of the parts file (it
-    # covers tech-support tickets, which the parts file does not contain)
-    if report.experimental_sections_enabled:
+    # Section 11 -- real data when a tech-support file was supplied, else omitted entirely
+    if report.support is not None:
         doc.add_page_break()
-        _heading(doc, SECTION_11_PLACEHOLDER.title)
-        doc.add_paragraph(SECTION_11_PLACEHOLDER.message)
-        _add_table(doc, SECTION_11_PLACEHOLDER.column_layout, [])
+        _heading(doc, "11. Аналитика Технической Поддержки")
+        sup = report.support
+        if sup.has_data_for_window:
+            s = sup.summary
+            doc.add_paragraph(f"Всего поступило заявок (тикетов): {format_number(s.ticket_count)}", style="List Bullet")
+            doc.add_paragraph(f"Доля закрытых заявок: {s.closed_share_pct:.1f}%", style="List Bullet")
+            doc.add_paragraph("Активность обращений в службу технической поддержки").bold = True
+            doc.add_paragraph(s.leader_follower_text())
+
+            _heading(doc, "11.1 Топ-15 АСЦ по объему обращений в ТП", level=2)
+            _add_table(doc, ["Сервисный центр", "Кол-во обращений"], [[r.organization, r.count] for r in sup.organizations])
+            if "section11_1_orgs" in charts:
+                doc.add_picture(charts["section11_1_orgs"], width=Inches(6))
+
+            _heading(doc, "11.2 Инженеры поддержки", level=2)
+            doc.add_paragraph(
+                "Данные не найдены — поле «Кто ответил» пустое во всей загруженной выгрузке "
+                "(этот раздел отсутствует и в эталонном отчёте по той же причине)."
+            ).italic = True
+
+            _heading(doc, "11.3 Распределение обращений по темам", level=2)
+            _add_table(doc, ["Тема (Причина обращения)", "Количество тикетов"], [[r.topic, r.count] for r in sup.topics])
+            if "section11_3_topics" in charts:
+                doc.add_picture(charts["section11_3_topics"], width=Inches(6))
+
+            _heading(doc, "11.4 Аудит качества заполнения заявок", level=2)
+            _add_table(
+                doc,
+                ["Поле системы", "Заполнено", "Пропущено", "Заполнение (%)"],
+                [[r.field_label, r.filled, r.missing, f"{r.fill_pct:.0f}%"] for r in sup.quality_audit],
+            )
+        else:
+            doc.add_paragraph("Файл по технической поддержке загружен, но не содержит данных за выбранный период.")
 
     # Section 12
     doc.add_page_break()

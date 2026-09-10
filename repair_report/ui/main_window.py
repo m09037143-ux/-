@@ -60,10 +60,11 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Автоматический отчёт о выполненных ремонтах")
-        self.setMinimumSize(640, 640)
+        self.setMinimumSize(960, 680)
 
         self.file_path: str | None = None
         self.parts_file_path: str | None = None
+        self.support_file_path: str | None = None
         self.report = None  # ReportData for the currently probed file/period
         self.work_dir = tempfile.mkdtemp(prefix="repair_report_")
         self._probe_thread: QThread | None = None
@@ -73,41 +74,41 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
 
-        # --- File selection: two PARALLEL, equal-weight inputs that together
-        # feed one report (not a "main file + optional extra" hierarchy --
-        # see docs/REVERSE_ENGINEERING.md §13's product-decision note) ---
+        # --- File selection: three PARALLEL, equal-weight inputs that
+        # together feed one report -- not a "main file + optional extras"
+        # hierarchy. Loading all three means the full report (sections 10
+        # and 11 included); loading fewer just narrows which sections have
+        # real data, no checkboxes involved (see
+        # docs/REVERSE_ENGINEERING.md §13/§14's product-decision notes). ---
         files_group = QGroupBox("1. Файлы для отчёта")
         files_row = QHBoxLayout(files_group)
 
-        main_col = QVBoxLayout()
-        main_col.addWidget(QLabel("Выгрузка ремонтов (WR_Consolidated_List_*.xlsx)"))
-        self.drop_area = DropArea(
-            self._load_file,
-            "Перетащите файл выгрузки ремонтов сюда\nили нажмите «Выбрать файл»",
+        self.drop_area, self.file_status_label = self._build_file_column(
+            files_row,
+            title="Выгрузка ремонтов (WR_Consolidated_List_*.xlsx)",
+            placeholder="Перетащите файл выгрузки ремонтов сюда\nили нажмите «Выбрать файл»",
+            on_drop=self._load_file,
+            on_pick=self._pick_file,
+            initial_status="Файл не выбран.",
         )
-        main_col.addWidget(self.drop_area)
-        pick_btn = QPushButton("Выбрать файл…")
-        pick_btn.clicked.connect(self._pick_file)
-        main_col.addWidget(pick_btn)
-        self.file_status_label = QLabel("Файл не выбран.")
-        self.file_status_label.setWordWrap(True)
-        main_col.addWidget(self.file_status_label)
-        files_row.addLayout(main_col)
 
-        parts_col = QVBoxLayout()
-        parts_col.addWidget(QLabel("Выгрузка по запасным частям (раздел 10)"))
-        self.parts_drop_area = DropArea(
-            self._load_parts_file,
-            "Перетащите файл по запасным частям сюда\nили нажмите «Выбрать файл»",
+        self.parts_drop_area, self.parts_file_status_label = self._build_file_column(
+            files_row,
+            title="Выгрузка по запасным частям (раздел 10)",
+            placeholder="Перетащите файл по запасным частям сюда\nили нажмите «Выбрать файл»",
+            on_drop=self._load_parts_file,
+            on_pick=self._pick_parts_file,
+            initial_status="Файл не выбран — раздел 10 будет скрыт, пока не загружен.",
         )
-        parts_col.addWidget(self.parts_drop_area)
-        parts_pick_btn = QPushButton("Выбрать файл…")
-        parts_pick_btn.clicked.connect(self._pick_parts_file)
-        parts_col.addWidget(parts_pick_btn)
-        self.parts_file_status_label = QLabel("Файл не выбран — раздел 10 будет скрыт, пока не загружен.")
-        self.parts_file_status_label.setWordWrap(True)
-        parts_col.addWidget(self.parts_file_status_label)
-        files_row.addLayout(parts_col)
+
+        self.support_drop_area, self.support_file_status_label = self._build_file_column(
+            files_row,
+            title="Выгрузка по технической поддержке (раздел 11)",
+            placeholder="Перетащите файл по техподдержке сюда\nили нажмите «Выбрать файл»",
+            on_drop=self._load_support_file,
+            on_pick=self._pick_support_file,
+            initial_status="Файл не выбран — раздел 11 будет скрыт, пока не загружен.",
+        )
 
         layout.addWidget(files_group)
 
@@ -134,22 +135,8 @@ class MainWindow(QMainWindow):
         profile_layout.addWidget(new_profile_btn)
         layout.addWidget(profile_group)
 
-        # --- Options ---
-        options_group = QGroupBox("4. Настройки отчёта")
-        options_layout = QVBoxLayout(options_group)
-        self.experimental_checkbox = QCheckBox("Показывать раздел 11 (техподдержка) как «требует уточнения»")
-        self.experimental_checkbox.setToolTip(
-            "Логика раздела 11 (техподдержка) не подтверждена ни одной доступной выгрузкой — "
-            "по умолчанию раздел скрыт, чтобы не показывать недостоверные цифры. Раздел 10 "
-            "(запчасти) в этот чекбокс больше не входит — он показывается автоматически, когда "
-            "загружена выгрузка по запасным частям (см. блок «1. Файлы для отчёта»), и как прежде "
-            "скрыт, если этот файл не загружен."
-        )
-        options_layout.addWidget(self.experimental_checkbox)
-        layout.addWidget(options_group)
-
         # --- Format selection ---
-        format_group = QGroupBox("5. Формат выгрузки")
+        format_group = QGroupBox("4. Формат выгрузки")
         format_layout = QHBoxLayout(format_group)
         self.format_html = QCheckBox("HTML")
         self.format_pdf = QCheckBox("PDF")
@@ -173,6 +160,20 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.progress_label)
 
         layout.addStretch()
+
+    def _build_file_column(self, parent_row: QHBoxLayout, *, title: str, placeholder: str, on_drop, on_pick, initial_status: str):
+        col = QVBoxLayout()
+        col.addWidget(QLabel(title))
+        drop_area = DropArea(on_drop, placeholder)
+        col.addWidget(drop_area)
+        pick_btn = QPushButton("Выбрать файл…")
+        pick_btn.clicked.connect(on_pick)
+        col.addWidget(pick_btn)
+        status_label = QLabel(initial_status)
+        status_label.setWordWrap(True)
+        col.addWidget(status_label)
+        parent_row.addLayout(col)
+        return drop_area, status_label
 
     # ---- profile management ----
     def _reload_profiles(self):
@@ -212,11 +213,22 @@ class MainWindow(QMainWindow):
         if path:
             self._load_parts_file(path)
 
+    def _pick_support_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Выберите файл по технической поддержке", "", "Excel (*.xlsx *.xlsm)")
+        if path:
+            self._load_support_file(path)
+
     def _load_parts_file(self, path: str):
         self.parts_file_path = path
         self.parts_file_status_label.setText(f"Загружен: {os.path.basename(path)}")
         if self.file_path:
             self._load_file(self.file_path)  # re-probe so section 10 data is included
+
+    def _load_support_file(self, path: str):
+        self.support_file_path = path
+        self.support_file_status_label.setText(f"Загружен: {os.path.basename(path)}")
+        if self.file_path:
+            self._load_file(self.file_path)  # re-probe so section 11 data is included
 
     def _load_file(self, path: str):
         self.file_path = path
@@ -224,15 +236,25 @@ class MainWindow(QMainWindow):
         self.generate_btn.setEnabled(False)
         self.period_combo.setEnabled(False)
 
-        self._probe_thread = QThread()
-        self._probe_worker = ProbeWorker(path, self.parts_file_path)
-        self._probe_worker.moveToThread(self._probe_thread)
-        self._probe_thread.started.connect(self._probe_worker.run)
-        self._probe_worker.finished.connect(self._on_probe_finished)
-        self._probe_worker.failed.connect(self._on_probe_failed)
-        self._probe_worker.finished.connect(self._probe_thread.quit)
-        self._probe_worker.failed.connect(self._probe_thread.quit)
-        self._probe_thread.start()
+        # Parented to `self` so Qt's parent/child ownership keeps the C++
+        # QThread object alive even after `self._probe_thread` is reassigned
+        # by the next drop (loading main+parts+support in quick succession
+        # re-probes repeatedly) -- without a parent, losing the last Python
+        # reference to a QThread that hasn't fully stopped yet aborts the
+        # process ("QThread: Destroyed while thread '' is still running").
+        probe_thread = QThread(self)
+        probe_worker = ProbeWorker(path, self.parts_file_path, self.support_file_path)
+        probe_worker.moveToThread(probe_thread)
+        probe_thread.started.connect(probe_worker.run)
+        probe_worker.finished.connect(self._on_probe_finished)
+        probe_worker.failed.connect(self._on_probe_failed)
+        probe_worker.finished.connect(probe_thread.quit)
+        probe_worker.failed.connect(probe_thread.quit)
+        probe_thread.finished.connect(probe_thread.deleteLater)
+        # Keep references so they aren't GC'd before Qt is done with them.
+        self._probe_thread = probe_thread
+        self._probe_worker = probe_worker
+        probe_thread.start()
 
     def _on_probe_finished(self, report):
         self.report = report
@@ -249,6 +271,7 @@ class MainWindow(QMainWindow):
         self.period_combo.setEnabled(True)
         self._update_previous_period_label(report)
         self._update_parts_status_label(report)
+        self._update_support_status_label(report)
         self.generate_btn.setEnabled(True)
 
     def _on_probe_failed(self, message: str):
@@ -270,6 +293,21 @@ class MainWindow(QMainWindow):
                 f"Загружен: {os.path.basename(self.parts_file_path)} — ⚠ нет данных за {window}."
             )
 
+    def _update_support_status_label(self, report):
+        if report.support is None:
+            return  # no support file selected -- leave the static label as-is
+        if report.support.has_data_for_window:
+            s = report.support.summary
+            self.support_file_status_label.setText(
+                f"Загружен: {os.path.basename(self.support_file_path)} — за выбранный период найдено "
+                f"{s.ticket_count} обращений."
+            )
+        else:
+            window = " и ".join(str(p) for p in report.support.window_periods)
+            self.support_file_status_label.setText(
+                f"Загружен: {os.path.basename(self.support_file_path)} — ⚠ нет данных за {window}."
+            )
+
     def _update_previous_period_label(self, report):
         if report.previous_available:
             self.previous_period_label.setText(f"✓ {report.previous_note}")
@@ -289,11 +327,10 @@ class MainWindow(QMainWindow):
         from repair_report.analytics.engine import build_report
 
         try:
-            self.report = build_report(
-                self.file_path, period_key, self.experimental_checkbox.isChecked(), self.parts_file_path
-            )
+            self.report = build_report(self.file_path, period_key, self.parts_file_path, self.support_file_path)
             self._update_previous_period_label(self.report)
             self._update_parts_status_label(self.report)
+            self._update_support_status_label(self.report)
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "Ошибка", f"Не удалось пересчитать период: {e}")
 
@@ -323,25 +360,30 @@ class MainWindow(QMainWindow):
         self.progress_label.setText("Запуск…")
 
         period_key = self.period_combo.currentData()
-        self._report_thread = QThread()
-        self._report_worker = ReportWorker(
+        # See the comment in _load_file: parent to `self` to avoid the
+        # QThread being destroyed by Python GC while still running.
+        report_thread = QThread(self)
+        report_worker = ReportWorker(
             self.file_path,
             period_key,
             formats,
             out_paths,
             self._current_profile(),
-            self.experimental_checkbox.isChecked(),
             self.work_dir,
             self.parts_file_path,
+            self.support_file_path,
         )
-        self._report_worker.moveToThread(self._report_thread)
-        self._report_thread.started.connect(self._report_worker.run)
-        self._report_worker.progress.connect(self.progress_label.setText)
-        self._report_worker.finished.connect(self._on_report_finished)
-        self._report_worker.failed.connect(self._on_report_failed)
-        self._report_worker.finished.connect(self._report_thread.quit)
-        self._report_worker.failed.connect(self._report_thread.quit)
-        self._report_thread.start()
+        report_worker.moveToThread(report_thread)
+        report_thread.started.connect(report_worker.run)
+        report_worker.progress.connect(self.progress_label.setText)
+        report_worker.finished.connect(self._on_report_finished)
+        report_worker.failed.connect(self._on_report_failed)
+        report_worker.finished.connect(report_thread.quit)
+        report_worker.failed.connect(report_thread.quit)
+        report_thread.finished.connect(report_thread.deleteLater)
+        self._report_thread = report_thread
+        self._report_worker = report_worker
+        report_thread.start()
 
     def _on_report_finished(self, paths: list[str]):
         self.progress_bar.setVisible(False)

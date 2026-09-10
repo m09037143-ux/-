@@ -1,0 +1,26 @@
+{
+  "_comment": "Section 11 (tech support) tunables. See docs/REVERSE_ENGINEERING.md §14 for how every formula here was verified against the reference DOCX using the client's tech-support ticket export.",
+
+  "period_field": "created_date",
+  "period_window_months": 2,
+  "_period_comment": "Same 2-month (current + calendar-previous) window as section 10 -- verified exactly: filtering 'Дата создания' to June+July 2026 gives 287 rows, matching the reference's 'Всего поступило заявок (тикетов): 287' exactly, and the same window's organization/topic breakdowns match the reference's tables 1:1 (see §14).",
+
+  "closed_statuses": [
+    "Оценен",
+    "Запрос закрыт (ожидает оценки АСЦ)",
+    "Отмена АСЦ",
+    "Отменён провайдером"
+  ],
+  "_closed_statuses_comment": "Terminal (closed) ticket statuses, as opposed to the 'Ожидает...'/'Ожидается...' (awaiting X) statuses which are still open. IMPORTANT: 'Статус' is a LIVE field (see §14) -- the exact 'Доля закрытых заявок' percentage will drift from the reference's stale snapshot as tickets get resolved over time; this is expected, not a bug. Any status value not in this list is treated as open.",
+
+  "quality_audit_fields": [
+    { "key": "serial_number", "label": "Серийный номер" },
+    { "key": "model", "label": "Модель" },
+    { "key": "brand", "label": "Бренд" },
+    { "key": "chassis", "label": "Шасси" },
+    { "key": "topic", "label": "Тема обращения" }
+  ],
+
+  "top_n_organizations": 15,
+  "top_n_topics": 15
+}

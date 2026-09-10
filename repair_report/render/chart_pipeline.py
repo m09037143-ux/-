@@ -74,4 +74,9 @@ def generate_charts(report: ReportData, out_dir: str | Path) -> dict[str, str]:
         )
         paths["section10_2_geo"] = str(p10_2)
 
+    # Section 11 -- only when a tech-support file was supplied (see engine.py)
+    if report.support is not None and report.support.has_data_for_window:
+        bar("section11_1_orgs", report.support.organizations, name_attr="organization", value_attr="count", n=top_n)
+        bar("section11_3_topics", report.support.topics, name_attr="topic", value_attr="count", n=top_n)
+
     return paths

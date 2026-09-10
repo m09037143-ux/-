@@ -13,7 +13,6 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from repair_report.analytics.common import format_dynamics, format_number, format_rub, repair_level_label
 from repair_report.analytics.engine import ReportData
-from repair_report.analytics.parts_support import SECTION_10_PLACEHOLDER, SECTION_11_PLACEHOLDER
 from repair_report.analytics.periods import MONTH_NAMES_RU
 from repair_report.config import loader
 from repair_report.profile import ClientProfile
@@ -62,6 +61,30 @@ def _build_parts_context(report: ReportData) -> dict | None:
         "month_totals": [st.month_totals[m] for m in st.months],
         "grand_total": st.grand_total,
         "geography": p.geography,
+    }
+
+
+def _build_support_context(report: ReportData) -> dict | None:
+    if report.support is None:
+        return None
+    s = report.support
+    window_label = " / ".join(s.window_periods and [str(x) for x in s.window_periods] or []) or "—"
+    if not s.has_data_for_window:
+        return {"has_data": False, "window_label": window_label}
+
+    return {
+        "has_data": True,
+        "window_label": window_label,
+        "ticket_count": format_number(s.summary.ticket_count),
+        "closed_share_fmt": f"{s.summary.closed_share_pct:.1f}%",
+        "leader_follower_text": s.summary.leader_follower_text(),
+        "organizations": s.organizations,
+        "topics": s.topics,
+        "quality_audit": s.quality_audit,
+        "no_engineers_note": (
+            "Данные не найдены — поле «Кто ответил» пустое во всей загруженной выгрузке "
+            "(этот раздел отсутствует и в эталонном отчёте по той же причине)."
+        ),
     }
 
 
@@ -201,12 +224,8 @@ def build_html(report: ReportData, profile: ClientProfile, work_dir: str | Path,
         defect_texts=report.defect_texts,
         iris_errors=report.iris_errors,
         fraud_rows=report.fraud_rows,
-        experimental_sections_enabled=report.experimental_sections_enabled,
         parts=_build_parts_context(report),
-        section10_message=SECTION_10_PLACEHOLDER.message,
-        section10_columns=SECTION_10_PLACEHOLDER.column_layout,
-        section11_message=SECTION_11_PLACEHOLDER.message,
-        section11_columns=SECTION_11_PLACEHOLDER.column_layout,
+        support=_build_support_context(report),
         detail_columns=_detail_columns(),
         detail_rows=report.detail_rows,
     )

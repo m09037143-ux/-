@@ -289,20 +289,49 @@
 {% else %}
 <p class="placeholder">Файл по запасным частям загружен, но не содержит данных за выбранный период ({{ parts.window_label }}).</p>
 {% endif %}
-{% elif experimental_sections_enabled %}
-<h2 class="page-break">10. Аналитика поставок запасных частей</h2>
-<p class="placeholder">{{ section10_message }}</p>
-<table>
-  <tr>{% for c in section10_columns %}<th>{{ c }}</th>{% endfor %}</tr>
-</table>
 {% endif %}
 
-{% if experimental_sections_enabled %}
-<h2 {% if not parts %}class="page-break"{% endif %}>11. Аналитика Технической Поддержки</h2>
-<p class="placeholder">{{ section11_message }}</p>
+{% if support %}
+<h2 class="page-break">11. Аналитика Технической Поддержки</h2>
+{% if support.has_data %}
+<ul>
+  <li>Всего поступило заявок (тикетов): {{ support.ticket_count }}</li>
+  <li>Доля закрытых заявок: {{ support.closed_share_fmt }}</li>
+</ul>
+<p><b>Активность обращений в службу технической поддержки</b></p>
+<p class="blurb">{{ support.leader_follower_text }}</p>
+
+<h3>11.1 Топ-15 АСЦ по объему обращений в ТП</h3>
 <table>
-  <tr>{% for c in section11_columns %}<th>{{ c }}</th>{% endfor %}</tr>
+  <tr><th>Сервисный центр</th><th>Кол-во обращений</th></tr>
+  {% for r in support.organizations %}
+  <tr><td>{{ r.organization }}</td><td class="num">{{ r.count }}</td></tr>
+  {% endfor %}
 </table>
+{% if charts.section11_1_orgs %}<div class="chart"><img src="{{ charts.section11_1_orgs }}"></div>{% endif %}
+
+<h3>11.2 Инженеры поддержки</h3>
+<p class="small-note">{{ support.no_engineers_note }}</p>
+
+<h3>11.3 Распределение обращений по темам</h3>
+<table>
+  <tr><th>Тема (Причина обращения)</th><th>Количество тикетов</th></tr>
+  {% for r in support.topics %}
+  <tr><td>{{ r.topic }}</td><td class="num">{{ r.count }}</td></tr>
+  {% endfor %}
+</table>
+{% if charts.section11_3_topics %}<div class="chart"><img src="{{ charts.section11_3_topics }}"></div>{% endif %}
+
+<h3>11.4 Аудит качества заполнения заявок</h3>
+<table>
+  <tr><th>Поле системы</th><th>Заполнено</th><th>Пропущено</th><th>Заполнение (%)</th></tr>
+  {% for r in support.quality_audit %}
+  <tr><td>{{ r.field_label }}</td><td class="num">{{ r.filled }}</td><td class="num">{{ r.missing }}</td><td class="num">{{ "%.0f"|format(r.fill_pct) }}%</td></tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="placeholder">Файл по технической поддержке загружен, но не содержит данных за выбранный период ({{ support.window_label }}).</p>
+{% endif %}
 {% endif %}
 
 <h2 class="page-break">12. Детализация ремонтов (Текущий период)</h2>

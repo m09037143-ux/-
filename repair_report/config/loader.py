@@ -44,6 +44,10 @@ def parts_config() -> dict:
     return _load_json("parts_config.json")
 
 
+def support_config() -> dict:
+    return _load_json("support_config.json")
+
+
 def clear_cache() -> None:
     """For tests that swap config files at runtime."""
     _load_json.cache_clear()
