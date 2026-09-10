@@ -6,6 +6,19 @@ have not been executed on real Windows 10/11** -- do that before shipping.
 PyInstaller does not cross-compile: you must run this on an actual Windows
 x64 machine (or a Windows CI runner/VM).
 
+**The built `.exe` is intentionally NOT committed to this repo** -- it's a
+build output (like `dist/`/`build/`, both gitignored), not source code, and
+a 100+ MB binary doesn't belong in git history. Two ways to actually get
+the file:
+
+- **GitHub Actions (no Windows machine needed):** `.github/workflows/build-windows-exe.yml`
+  builds it on a real `windows-latest` runner. Trigger it from the repo's
+  Actions tab ("Build Windows .exe" -> "Run workflow"), wait for the run to
+  finish, then download `RepairReportApp-windows-exe` from the run's
+  Artifacts section -- that's the real Windows .exe, not a Linux stand-in.
+- **Build it yourself** by following the steps below on an actual Windows
+  10/11 x64 machine.
+
 Two build specs are provided -- pick one:
 
 | Spec | Result | Use when |

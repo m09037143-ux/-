@@ -1,0 +1,54 @@
+name: Build Windows .exe
+
+# Builds the single-file RepairReportApp.exe ON a real Windows runner
+# (PyInstaller does not cross-compile -- this is why the .exe itself is
+# never committed to the repo, only the source + build spec are; see
+# packaging/BUILD.md). Trigger manually from the Actions tab, or push
+# touching the app/packaging paths.
+on:
+  workflow_dispatch: {}
+  push:
+    branches: ["**"]
+    paths:
+      - "repair_report/**"
+      - "main.py"
+      - "requirements.txt"
+      - "packaging/**"
+      - ".github/workflows/build-windows-exe.yml"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: "x64"
+
+      # WeasyPrint (PDF export) needs Pango/HarfBuzz/FontConfig native
+      # libraries on Windows -- see packaging/BUILD.md's GTK3-runtime
+      # caveat. Installing it here too so the build step itself can import
+      # weasyprint cleanly (PyInstaller's Analysis phase does import
+      # discovered hook modules).
+      - name: Install WeasyPrint native dependencies (GTK3 runtime)
+        run: |
+          choco install gtk-runtime -y --no-progress
+        continue-on-error: true # best-effort; see BUILD.md if PDF export needs revisiting
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build single-file .exe
+        run: |
+          pyinstaller packaging/repair_report_onefile.spec --distpath dist --workpath build
+
+      - name: Upload RepairReportApp.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: RepairReportApp-windows-exe
+          path: dist/RepairReportApp.exe
+          if-no-files-found: error
