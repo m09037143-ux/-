@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFileDialog,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -81,10 +82,20 @@ class MainWindow(QMainWindow):
         # real data, no checkboxes involved (see
         # docs/REVERSE_ENGINEERING.md §13/§14's product-decision notes). ---
         files_group = QGroupBox("1. Файлы для отчёта")
-        files_row = QHBoxLayout(files_group)
+        # A grid (not three independent QVBoxLayouts) so every column's row
+        # -- title, drop area, button, status -- is forced to the same
+        # height as its siblings. With independent per-column layouts, a
+        # title that wraps to a different number of lines than its
+        # neighbours pushes that column's drop area down/up relative to the
+        # others (reported as visible misalignment); a shared grid can't
+        # drift like that since each row's height is the max across the row.
+        files_grid = QGridLayout(files_group)
+        for col_idx in range(3):
+            files_grid.setColumnStretch(col_idx, 1)
 
         self.drop_area, self.file_status_label = self._build_file_column(
-            files_row,
+            files_grid,
+            column=0,
             title="Выгрузка ремонтов (WR_Consolidated_List_*.xlsx)",
             placeholder="Перетащите файл выгрузки ремонтов сюда\nили нажмите «Выбрать файл»",
             on_drop=self._load_file,
@@ -93,7 +104,8 @@ class MainWindow(QMainWindow):
         )
 
         self.parts_drop_area, self.parts_file_status_label = self._build_file_column(
-            files_row,
+            files_grid,
+            column=1,
             title="Выгрузка по запасным частям (раздел 10)",
             placeholder="Перетащите файл по запасным частям сюда\nили нажмите «Выбрать файл»",
             on_drop=self._load_parts_file,
@@ -102,7 +114,8 @@ class MainWindow(QMainWindow):
         )
 
         self.support_drop_area, self.support_file_status_label = self._build_file_column(
-            files_row,
+            files_grid,
+            column=2,
             title="Выгрузка по технической поддержке (раздел 11)",
             placeholder="Перетащите файл по техподдержке сюда\nили нажмите «Выбрать файл»",
             on_drop=self._load_support_file,
@@ -161,18 +174,24 @@ class MainWindow(QMainWindow):
 
         layout.addStretch()
 
-    def _build_file_column(self, parent_row: QHBoxLayout, *, title: str, placeholder: str, on_drop, on_pick, initial_status: str):
-        col = QVBoxLayout()
-        col.addWidget(QLabel(title))
+    def _build_file_column(self, grid: QGridLayout, *, column: int, title: str, placeholder: str, on_drop, on_pick, initial_status: str):
+        title_label = QLabel(title)
+        title_label.setWordWrap(True)
+        title_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        grid.addWidget(title_label, 0, column)
+
         drop_area = DropArea(on_drop, placeholder)
-        col.addWidget(drop_area)
+        grid.addWidget(drop_area, 1, column, Qt.AlignTop)
+
         pick_btn = QPushButton("Выбрать файл…")
         pick_btn.clicked.connect(on_pick)
-        col.addWidget(pick_btn)
+        grid.addWidget(pick_btn, 2, column)
+
         status_label = QLabel(initial_status)
         status_label.setWordWrap(True)
-        col.addWidget(status_label)
-        parent_row.addLayout(col)
+        status_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        grid.addWidget(status_label, 3, column)
+
         return drop_area, status_label
 
     # ---- profile management ----
