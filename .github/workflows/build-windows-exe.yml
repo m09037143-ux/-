@@ -86,11 +86,17 @@ jobs:
           Write-Host "Found GTK3 (MSYS2 mingw64) runtime bin directory: $bin"
           Get-ChildItem $bin -Filter "*.dll" | Select-Object -First 10 | ForEach-Object { Write-Host "  $($_.Name)" }
           echo "GTK_RUNTIME_BIN=$bin" >> $env:GITHUB_ENV
-          # Also put it on PATH for the rest of this job, so the sanity-
-          # check step below actually exercises THIS SAME install (the one
-          # that will be bundled), not whatever happens to be ambiently
-          # first on PATH already.
-          echo "$bin" >> $env:GITHUB_PATH
+          # Deliberately NOT adding $bin to $env:GITHUB_PATH (job-wide PATH)
+          # here: mingw-w64-x86_64-pango's own dependency chain brings its
+          # OWN python.exe into mingw64\bin, and prepending that to PATH
+          # for every later step made plain `python` in the next two steps
+          # resolve to mingw64's interpreter instead of the one
+          # actions/setup-python configured -- `pip install` (a separate
+          # pip.exe, unaffected) kept installing into the real Python's
+          # site-packages while `python -c "import weasyprint"` then ran
+          # against mingw64's DIFFERENT, empty one and failed with
+          # "No module named 'weasyprint'". Scope the PATH change to just
+          # the one step that needs it (below) instead.
 
       - name: Install dependencies
         run: |
@@ -98,7 +104,13 @@ jobs:
           pip install pyinstaller
 
       - name: Sanity-check weasyprint imports on this runner
-        run: python -c "import weasyprint; print('weasyprint OK:', weasyprint.__version__)"
+        shell: pwsh
+        run: |
+          # PATH change scoped to this step's own process only (does not
+          # leak into the Build/Upload steps below) -- see the comment in
+          # the locate step above for why this isn't done job-wide.
+          $env:PATH = "$env:GTK_RUNTIME_BIN;$env:PATH"
+          & "$env:pythonLocation\python.exe" -c "import weasyprint; print('weasyprint OK:', weasyprint.__version__)"
 
       - name: Build single-file .exe
         run: |
