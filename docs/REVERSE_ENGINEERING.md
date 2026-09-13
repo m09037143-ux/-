@@ -687,35 +687,42 @@ example `curl` call against a Yandex Cloud endpoint
 `instructions`/`input`/`max_output_tokens` fields) including a real API
 key pasted directly in chat.
 
-### IMPORTANT CAVEAT: unverified against the live endpoint
+### Verification status: confirmed working end-to-end, 2026-09-13
 
-Every environment this was developed and tested in blocks outbound
-network access to `ai.api.cloud.yandex.net` by policy (confirmed via the
-sandbox's own proxy status tool, which reported a 403 `connect_rejected`
-policy denial -- not a bug, not something to route around). This means:
+Every environment this was developed in blocks outbound network access
+to `ai.api.cloud.yandex.net` by policy (confirmed via the sandbox's own
+proxy status tool, a 403 `connect_rejected` policy denial -- not a bug,
+not something to route around), so this could only be tested against
+mocks there:
 
 - The exact request encoding was taken directly from the user's own
-  working `curl` example, so that part should be reliable.
-- The RESPONSE shape (`ai/client.py::_extract_text`) could NOT be
-  confirmed against a real call. It's written defensively against the
-  shape the endpoint's URL and field names (`instructions`/`input`/
-  `max_output_tokens`) imply -- OpenAI's Responses API -- trying
-  `output_text` first, then `output[].content[].text`, then falling back
-  to a classic chat-completions `choices[0].message.content` shape, and
-  raising a clear, diagnosable `AIResponseError` (naming the top-level
-  keys actually seen) if none match.
-- **This must be tested for real** (check the checkbox with a real API
-  key configured, generate a report, confirm the summary text actually
-  appears and reads sensibly) before being trusted end-to-end. Everything
-  UP TO the actual network call -- prompt construction, settings storage,
-  UI wiring, graceful-failure rendering in all 3 formats -- was tested
-  fully, by mocking `urllib.request.urlopen` at the exact call boundary
-  (see `tests/test_ai.py` and the headless GUI E2E scripts run during
-  development). If the real endpoint's response doesn't match any parsed
-  shape, the failure is a clean, visible "не удалось получить резюме от
-  ИИ-модели: неожиданный формат ответа (...)" note in the report, not a
-  crash or a silently wrong number -- fix `_extract_text` once the real
-  shape is known.
+  working `curl` example.
+- The RESPONSE shape (`ai/client.py::_extract_text`) is written
+  defensively against the shape the endpoint's URL and field names
+  (`instructions`/`input`/`max_output_tokens`) imply -- OpenAI's
+  Responses API -- trying `output_text` first, then
+  `output[].content[].text`, then falling back to a classic
+  chat-completions `choices[0].message.content` shape, and raising a
+  clear, diagnosable `AIResponseError` (naming the top-level keys
+  actually seen) if none match.
+
+**The user then tested it for real** (their own machine, real network,
+built `.exe`, checkbox enabled, a real API key configured). First
+attempt failed with `не удалось подключиться к сервису ИИ (_ssl.c:989:
+The handshake operation timed out)` -- shown correctly as a graceful
+in-report failure note, exactly as designed, with the rest of the report
+generated normally. Root cause turned out to be the user's own VPN
+stalling the TLS handshake to this specific host (TCP connects, but the
+TLS negotiation itself never completes -- a very different signature
+from a firewall's clean connection-refused, and easy to mistake for "the
+integration is broken"). Confirmed once identified: disabling the VPN
+fixed it, and the AI summary generated successfully -- so the request
+encoding, the response parsing, and the whole checkbox-to-rendered-text
+pipeline are now confirmed correct against the real endpoint, not just
+against mocks. `client.py`'s `URLError` handling now recognizes this
+timeout/handshake signature and adds a VPN/proxy hint directly to the
+error message shown to the user, since it's the most likely cause of
+this specific failure mode in the field.
 
 ### Security: the API key
 

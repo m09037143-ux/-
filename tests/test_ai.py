@@ -120,6 +120,18 @@ def test_request_completion_http_error_raises_ai_request_error(mock_urlopen):
         request_completion(api_key="bad", folder_id="f", model="m", instructions="", input_text="x")
 
 
+@patch("repair_report.ai.client.urllib.request.urlopen")
+def test_request_completion_handshake_timeout_hints_at_vpn(mock_urlopen):
+    """Confirmed in the field (docs/REVERSE_ENGINEERING.md §16): a VPN/
+    corporate proxy stalling the TLS handshake is the most common cause of
+    this exact error -- the message should point users at that first."""
+    import urllib.error
+
+    mock_urlopen.side_effect = urllib.error.URLError("_ssl.c:989: The handshake operation timed out")
+    with pytest.raises(AIRequestError, match="VPN"):
+        request_completion(api_key="k", folder_id="f", model="m", instructions="", input_text="x")
+
+
 @patch("repair_report.ai.summary.request_completion")
 def test_generate_summary_truncates_overlong_output(mock_request):
     mock_request.return_value = "слово " * 5000  # way over MAX_SUMMARY_CHARS

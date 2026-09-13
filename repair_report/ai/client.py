@@ -3,17 +3,15 @@
 Responses API request/response shape (instructions/input/max_output_tokens
 in, an "output" list or "output_text" convenience field out).
 
-IMPORTANT -- UNVERIFIED AGAINST THE LIVE ENDPOINT: this was built and
-tested in a network-sandboxed environment where outbound access to
-ai.api.cloud.yandex.net is blocked by policy, so the request shape below
-(taken directly from the example curl command supplied when this feature
-was requested) and the response parsing (based on the published OpenAI
-Responses API shape, which this endpoint is documented to mirror) have
-NOT been exercised against a real response. Test this for real (see
-docs/REVERSE_ENGINEERING.md §16) before relying on it -- response parsing
-is deliberately defensive (falls back through a few known shapes) and
-raises a clear, diagnosable error rather than silently returning garbage
-if the real response doesn't match any of them.
+This was built and initially tested in a network-sandboxed environment
+where outbound access to ai.api.cloud.yandex.net is blocked by policy, so
+the request/response handling could only be tested against mocks there.
+Confirmed working end-to-end against the real endpoint on the user's own
+machine afterward (see docs/REVERSE_ENGINEERING.md §16) -- the one
+failure hit along the way (a TLS handshake timeout) turned out to be a
+VPN/corporate proxy stalling the connection to this specific host, not a
+bug in the request/response handling here; see the URLError branch below
+for the resulting hint.
 
 Uses only the standard library (urllib) -- no new dependency for one
 optional feature.
@@ -84,7 +82,15 @@ def request_completion(
             detail = e.read().decode("utf-8", errors="replace")[:500]
         raise AIRequestError(f"сервис вернул ошибку HTTP {e.code}{': ' + detail if detail else ''}") from e
     except urllib.error.URLError as e:
-        raise AIRequestError(f"не удалось подключиться к сервису ИИ ({e.reason})") from e
+        hint = ""
+        if "handshake" in str(e.reason).lower() or "timed out" in str(e.reason).lower():
+            # Confirmed in the field: a VPN/corporate proxy stalling the
+            # TLS handshake to this specific host is the most common cause
+            # of exactly this error (TCP connects, but the TLS negotiation
+            # itself never completes) -- point at that first rather than
+            # a generic "network problem".
+            hint = " — если включён VPN или корпоративный прокси, попробуйте отключить его или проверить, не блокирует ли он ai.api.cloud.yandex.net"
+        raise AIRequestError(f"не удалось подключиться к сервису ИИ ({e.reason}){hint}") from e
     except TimeoutError as e:
         raise AIRequestError(f"сервис ИИ не ответил за {timeout_s} сек.") from e
 

@@ -104,16 +104,13 @@ against verified ground truth, not a flaky test.
 - **Optional AI-generated executive summary** (checkbox "Провести анализ
   с помощью ИИ") calls an external Yandex Cloud endpoint to write a <=2-page
   narrative summary at the top of the report -- see
-  `docs/REVERSE_ENGINEERING.md` §16 for the full design, and its caveat
-  section in particular: **the actual HTTP response shape from that
-  endpoint could not be verified**, since outbound network access to it
-  was blocked by policy in every environment this was built/tested in.
-  Request construction and everything else (settings storage, UI, prompt
-  content, graceful-failure rendering) was fully tested by mocking the
-  network call; only the live response parsing needs a real run to
-  confirm. A failure there never blocks the rest of the report -- it
-  renders as a visible, honest failure note instead of silently vanishing
-  or crashing.
+  `docs/REVERSE_ENGINEERING.md` §16 for the full design. Confirmed working
+  end-to-end against the real endpoint (not just mocks) on 2026-09-13. A
+  failure there (network/proxy/VPN issues, bad key, etc.) never blocks the
+  rest of the report -- it renders as a visible, honest failure note
+  instead of silently vanishing or crashing; a TLS-handshake-timeout
+  failure specifically usually means a VPN or corporate proxy is stalling
+  the connection to this one host, and the error message says so.
 - **Sections 10 (spare parts) and 11 (tech support) both have real data
   sources now.** Each is a second/third OPTIONAL file the app can load,
   distinct from the main `WR_Consolidated_List_*.xlsx` -- see
