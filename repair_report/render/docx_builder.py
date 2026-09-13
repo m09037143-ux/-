@@ -84,7 +84,7 @@ def save_docx(
     doc.styles["Normal"].font.size = Pt(10)
 
     title = doc.add_paragraph()
-    run = title.add_run("ЕЖЕМЕСЯЧНЫЙ ОТЧЕТ О ВЫПОЛНЕННОЙ РАБОТЕ")
+    run = title.add_run("ОТЧЕТ О ВЫПОЛНЕННОЙ РАБОТЕ")
     run.bold = True
     run.font.size = Pt(18)
 
@@ -106,10 +106,10 @@ def save_docx(
     # itself; a string starting with "ERROR:" means generation failed and
     # is shown as such rather than silently dropped.
     if report.ai_summary:
-        _heading(doc, "Резюме (подготовлено с помощью ИИ)")
+        _heading(doc, "Краткие обобщённые данные")
         if report.ai_summary.startswith("ERROR:"):
             doc.add_paragraph(
-                f"Не удалось получить резюме от ИИ-модели: {report.ai_summary[len('ERROR:'):].strip()}. "
+                f"Не удалось сформировать данные: {report.ai_summary[len('ERROR:'):].strip()}. "
                 "Остальная часть отчёта сформирована в обычном режиме."
             ).italic = True
         else:
@@ -117,8 +117,8 @@ def save_docx(
                 if para.strip():
                     doc.add_paragraph(para.strip())
             doc.add_paragraph(
-                "Резюме сформировано автоматически ИИ-моделью на основе агрегированных показателей отчёта "
-                "и требует проверки перед использованием."
+                "Данные сформированы автоматически на основе показателей отчёта "
+                "и требуют проверки перед использованием."
             ).italic = True
         doc.add_page_break()
 
@@ -143,7 +143,7 @@ def save_docx(
     _heading(doc, "2. Управленческое резюме")
     kpi, kpi_prev = report.kpis, report.kpis_prev
     narrative = (
-        f"Представленные данные отражают фактическое количество ремонтируемой техники за период из целевого файла .xlsx. "
+        f"Представленные данные отражают фактическое количество ремонтируемой техники за период. "
         f"В текущем периоде в обслуживании приняли участие {kpi.asc_count} АСЦ из {kpi.region_count} регионов. "
         f"Всего выполнено {format_number(kpi.repair_count)} ремонтов на общую сумму {format_rub(kpi.total_sum)}. "
         f"Средний срок ремонта по сети составил {round(kpi.avg_duration_days) if kpi.avg_duration_days is not None else '—'} дн. "

@@ -141,7 +141,7 @@ def build_html(report: ReportData, profile: ClientProfile, work_dir: str | Path,
         return format_dynamics(cur, prev, unit) if has_prev else "н/д"
 
     summary_narrative = (
-        f"Представленные данные отражают фактическое количество ремонтируемой техники за период из целевого файла .xlsx. "
+        f"Представленные данные отражают фактическое количество ремонтируемой техники за период. "
         f"В текущем периоде в обслуживании приняли участие {kpi.asc_count} АСЦ из {kpi.region_count} регионов. "
         f"Всего выполнено {format_number(kpi.repair_count)} ремонтов на общую сумму {format_rub(kpi.total_sum)}. "
         f"Средний срок ремонта по сети составил {round(kpi.avg_duration_days) if kpi.avg_duration_days is not None else '—'} дн. "
