@@ -43,14 +43,37 @@ jobs:
       - name: Locate GTK3 runtime DLLs and export GTK_RUNTIME_BIN
         shell: pwsh
         run: |
-          $dll = Get-ChildItem -Path "C:\Program Files*","C:\ProgramData\chocolatey*" -Filter "libgobject-2.0-0.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $dll) {
-            Write-Error "libgobject-2.0-0.dll not found anywhere under Program Files/chocolatey after installing gtk-runtime -- WeasyPrint/PDF export would be broken in the built .exe. Failing the build instead of shipping it silently broken (see packaging/BUILD.md)."
+          # windows-latest images ship a STALE GTK2-Runtime under
+          # "Program Files (x86)" (pre-existing, unrelated to the
+          # gtk-runtime choco package just installed above) that also
+          # happens to contain a file named libgobject-2.0-0.dll -- an
+          # earlier version of this search picked that one up first
+          # (Select-Object -First 1 with no filtering) and bundled an
+          # incompatible GTK2 DLL, which still failed to load. Exclude any
+          # "GTK2" path explicitly, and require BOTH libgobject and
+          # libpango to be present in the same directory as a sanity check
+          # that it's a real, complete GTK3 runtime rather than a stray
+          # same-named file.
+          $candidates = Get-ChildItem -Path "C:\Program Files*","C:\ProgramData\chocolatey*" -Filter "libgobject-2.0-0.dll" -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.DirectoryName -notmatch 'GTK2' } |
+            Where-Object { Test-Path (Join-Path $_.DirectoryName "libpango-1.0-0.dll") }
+
+          if (-not $candidates) {
+            Write-Error "No usable GTK3 runtime directory found (with both libgobject-2.0-0.dll and libpango-1.0-0.dll, excluding any stale GTK2-Runtime) after installing gtk-runtime -- WeasyPrint/PDF export would be broken in the built .exe. Failing the build instead of shipping it silently broken (see packaging/BUILD.md)."
             exit 1
           }
+          # If multiple valid candidates exist, prefer one whose path
+          # actually says "GTK3".
+          $dll = $candidates | Sort-Object { if ($_.DirectoryName -match 'GTK3') { 0 } else { 1 } } | Select-Object -First 1
           $bin = $dll.DirectoryName
           Write-Host "Found GTK3 runtime bin directory: $bin"
+          Get-ChildItem $bin -Filter "*.dll" | ForEach-Object { Write-Host "  $($_.Name)" }
           echo "GTK_RUNTIME_BIN=$bin" >> $env:GITHUB_ENV
+          # Also put it on PATH for the rest of this job, so the sanity-
+          # check step below actually exercises THIS SAME GTK3 install
+          # (the one that will be bundled), not whatever happens to be
+          # ambiently first on PATH already.
+          echo "$bin" >> $env:GITHUB_PATH
 
       - name: Install dependencies
         run: |

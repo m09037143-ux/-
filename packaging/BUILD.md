@@ -66,10 +66,17 @@ the trade-off if you're unsure which to pick.
   $env:GTK_RUNTIME_BIN = "C:\Program Files\GTK3-Runtime Win64\bin"
   ```
   (adjust the path to wherever your installer put it -- search for
-  `libgobject-2.0-0.dll` if unsure). The GitHub Actions workflow does
-  this automatically (it locates the DLLs after `choco install
-  gtk-runtime` and exports the variable itself) -- this step is only
-  needed when building by hand.
+  `libgobject-2.0-0.dll` if unsure, but double-check the match: some
+  Windows images/machines carry a STALE **GTK2**-Runtime elsewhere on
+  disk that also has a same-named file, which looks like a match but
+  doesn't actually work -- confirm the directory you pick also has
+  `libpango-1.0-0.dll` next to it, and that the path says "GTK3", not
+  "GTK2". This exact mix-up broke the first attempt at this fix, caught
+  by the sanity-check step below rather than shipped silently). The
+  GitHub Actions workflow does this automatically (it locates the DLLs
+  after `choco install gtk-runtime`, filters out any GTK2 match, and
+  exports the variable itself) -- this step is only needed when building
+  by hand.
   - **If you see `Ошибка при формировании отчёта: cannot load library
     'libgobject-2.0-0': error 0x7e ... ctypes.util.find_library() did not
     manage to locate a library called 'libgobject-2.0-0'`** when running
