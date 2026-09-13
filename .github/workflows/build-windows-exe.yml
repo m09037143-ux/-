@@ -106,11 +106,17 @@ jobs:
       - name: Sanity-check weasyprint imports on this runner
         shell: pwsh
         run: |
-          # PATH change scoped to this step's own process only (does not
-          # leak into the Build/Upload steps below) -- see the comment in
-          # the locate step above for why this isn't done job-wide.
-          $env:PATH = "$env:GTK_RUNTIME_BIN;$env:PATH"
-          & "$env:pythonLocation\python.exe" -c "import weasyprint; print('weasyprint OK:', weasyprint.__version__)"
+          # Since Python 3.8, ctypes-based DLL loading on Windows no longer
+          # searches PATH for a loaded DLL's OWN dependencies (bpo-36085) --
+          # merely having GTK_RUNTIME_BIN on PATH gets libgobject-2.0-0.dll
+          # itself found (via the pure-Python ctypes.util.find_library(),
+          # which does read PATH) but then fails to load it with "error
+          # 0x7e" because ITS dependencies aren't resolved. The real .exe
+          # will need the exact same os.add_dll_directory() call at
+          # startup (see main.py) -- reproduce it here so this check
+          # actually proves what will happen at runtime, not a
+          # PATH-only approximation of it.
+          & "$env:pythonLocation\python.exe" -c "import os; os.add_dll_directory(os.environ['GTK_RUNTIME_BIN']); os.environ['WEASYPRINT_DLL_DIRECTORIES'] = os.environ['GTK_RUNTIME_BIN']; import weasyprint; print('weasyprint OK:', weasyprint.__version__)"
 
       - name: Build single-file .exe
         run: |
