@@ -128,10 +128,19 @@ class MainWindow(QMainWindow):
         # --- Period selection ---
         period_group = QGroupBox("2. Отчётный период")
         period_layout = QVBoxLayout(period_group)
+        period_row = QHBoxLayout()
+        self.period_kind_combo = QComboBox()
+        self.period_kind_combo.addItem("Месяц", userData="month")
+        self.period_kind_combo.addItem("Квартал", userData="quarter")
+        self.period_kind_combo.addItem("Год", userData="year")
+        self.period_kind_combo.setEnabled(False)
+        self.period_kind_combo.currentIndexChanged.connect(self._on_period_kind_changed)
+        period_row.addWidget(self.period_kind_combo)
         self.period_combo = QComboBox()
         self.period_combo.setEnabled(False)
         self.period_combo.currentIndexChanged.connect(self._on_period_changed)
-        period_layout.addWidget(self.period_combo)
+        period_row.addWidget(self.period_combo, stretch=1)
+        period_layout.addLayout(period_row)
         self.previous_period_label = QLabel("")
         self.previous_period_label.setWordWrap(True)
         period_layout.addWidget(self.previous_period_label)
@@ -280,18 +289,46 @@ class MainWindow(QMainWindow):
         self.file_status_label.setText(
             f"Файл загружен: {os.path.basename(self.file_path)} — найдено периодов: {len(report.all_periods)}."
         )
-        self.period_combo.blockSignals(True)
-        self.period_combo.clear()
-        for p in report.all_periods:
-            self.period_combo.addItem(f"{MONTH_NAMES_RU[p.month]} {p.year}", userData=p.key)
-        # default: latest period selected
-        self.period_combo.setCurrentIndex(self.period_combo.count() - 1)
-        self.period_combo.blockSignals(False)
+        # Default view: month granularity, latest month selected -- matches
+        # the report ProbeWorker already built (build_report() with no
+        # requested key defaults to the latest month too), so no recompute
+        # is needed here, unlike _on_period_kind_changed/_on_period_changed.
+        self.period_kind_combo.blockSignals(True)
+        self.period_kind_combo.setCurrentIndex(0)  # "Месяц"
+        self.period_kind_combo.blockSignals(False)
+        self.period_kind_combo.setEnabled(True)
+        self._populate_period_combo("month")
         self.period_combo.setEnabled(True)
         self._update_previous_period_label(report)
         self._update_parts_status_label(report)
         self._update_support_status_label(report)
         self.generate_btn.setEnabled(True)
+
+    def _populate_period_combo(self, kind: str) -> None:
+        """Fill self.period_combo with every span of `kind` present in
+        self.report.all_periods (see analytics.periods.available_spans),
+        selecting the most recent one by default. Signals are blocked while
+        repopulating -- the caller is responsible for recomputing the report
+        for whatever ends up selected (see _on_period_kind_changed); the one
+        exception is _on_probe_finished, whose report already matches the
+        default month population, so it doesn't need to."""
+        from repair_report.analytics.periods import available_spans
+
+        spans = available_spans(self.report.all_periods, kind)
+        self.period_combo.blockSignals(True)
+        self.period_combo.clear()
+        for span in spans:
+            self.period_combo.addItem(str(span), userData=span.key)
+        if spans:
+            self.period_combo.setCurrentIndex(len(spans) - 1)  # default: most recent
+        self.period_combo.blockSignals(False)
+
+    def _on_period_kind_changed(self, _index: int) -> None:
+        if self.report is None:
+            return
+        kind = self.period_kind_combo.currentData()
+        self._populate_period_combo(kind)
+        self._recompute_for_current_period()
 
     def _on_probe_failed(self, message: str):
         self.file_status_label.setText("Не удалось прочитать файл.")
@@ -336,8 +373,14 @@ class MainWindow(QMainWindow):
             self.previous_period_label.setStyleSheet("color: #b8860b;")
 
     def _on_period_changed(self, _index: int):
-        # Re-probe with the newly selected period so the "previous period"
-        # note reflects the right calendar-previous month.
+        self._recompute_for_current_period()
+
+    def _recompute_for_current_period(self):
+        # Rebuild the report for whatever span is now selected (month/
+        # quarter/year), so the "previous period" note and every table
+        # reflect it. Runs synchronously on the UI thread, same as before
+        # this method was extracted -- period switches are much cheaper
+        # than the full chart+render pipeline in _generate_report.
         if not self.file_path:
             return
         period_key = self.period_combo.currentData()
