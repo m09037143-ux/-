@@ -19,11 +19,18 @@ repair_report/
                       the file doesn't look like the expected export.
   analytics/          One module per report section (summary, categories,
                       regions_asc, sla_quality, manufacturers, tv_analysis,
-                      iris_defects, fraud, detail, parts_support, periods,
+                      iris_defects, fraud, detail, parts, support, periods,
                       registries) plus shared helpers (common.py, tables.py)
                       and the orchestrator (engine.py). This layer has NO
-                      UI/rendering dependencies -- it's a plain library,
-                      independently testable and tested.
+                      UI/rendering/network dependencies -- it's a plain
+                      library, independently testable and tested.
+                      periods.py also defines PeriodSpan (month/quarter/
+                      year -- see docs/REVERSE_ENGINEERING.md §15).
+  ai/                 Optional AI-generated executive summary: client.py
+                      (HTTP call, stdlib urllib only) + summary.py (prompt/
+                      digest + orchestration). The ONLY part of the app
+                      that makes a network call -- see
+                      docs/REVERSE_ENGINEERING.md §16.
   charts/             matplotlib chart rendering -> PNG, shared by all 3
                       output formats so they never visually disagree.
   render/             HTML (Jinja2, the source-of-truth layout), PDF
@@ -39,6 +46,9 @@ repair_report/
   profile.py          Per-client report-header requisites (Исполнитель/
                       Заказчик/Договор/подписант), persisted as JSON under
                       the user's local app-data directory.
+  ai_settings.py      AI-summary API key/Folder ID, persisted the same way
+                      as profile.py -- local app-data only, never in git,
+                      never bundled into the .exe.
 
 tests/
   fixtures/           Dev-only copies of the reference files, INCLUDING the
@@ -85,6 +95,25 @@ against verified ground truth, not a flaky test.
 
 ## Known limitations / honesty notes
 
+- **Report period can now be a month, quarter, or calendar year**, not
+  just a month -- see `docs/REVERSE_ENGINEERING.md` §15. A quarter/year
+  report AGGREGATES over every present month in that span (not just its
+  last month), and adds a "2.1 Динамика по месяцам" subsection breaking
+  that span down month by month. Default stays a single month (the latest
+  one with data), unchanged from before.
+- **Optional AI-generated executive summary** (checkbox "Провести анализ
+  с помощью ИИ") calls an external Yandex Cloud endpoint to write a <=2-page
+  narrative summary at the top of the report -- see
+  `docs/REVERSE_ENGINEERING.md` §16 for the full design, and its caveat
+  section in particular: **the actual HTTP response shape from that
+  endpoint could not be verified**, since outbound network access to it
+  was blocked by policy in every environment this was built/tested in.
+  Request construction and everything else (settings storage, UI, prompt
+  content, graceful-failure rendering) was fully tested by mocking the
+  network call; only the live response parsing needs a real run to
+  confirm. A failure there never blocks the rest of the report -- it
+  renders as a visible, honest failure note instead of silently vanishing
+  or crashing.
 - **Sections 10 (spare parts) and 11 (tech support) both have real data
   sources now.** Each is a second/third OPTIONAL file the app can load,
   distinct from the main `WR_Consolidated_List_*.xlsx` -- see

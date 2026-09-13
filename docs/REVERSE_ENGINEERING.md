@@ -561,3 +561,232 @@ raising `ColumnResolutionError`. Cutoff raised to 0.85, which still comfortably
 tolerates real cosmetic drift (a trailing-space + lowercase rename of the
 same header scores 0.94+) while rejecting the above collision. See
 `tests/test_ingest.py`.
+
+## §15. Quarter/year report periods + monthly dynamics -- 2026-09-13
+
+User request: let the report cover a month, quarter, or calendar year (not
+just a month), and when the span is longer than a month, show comparative
+tables/charts of the monthly dynamics within it. Default stays a single
+month (the latest one with data) -- unchanged from before.
+
+### Design decisions (confirmed with the user before implementing)
+
+1. **Aggregation, not "latest month only".** Sections 1-9/12 for a
+   quarter/year report show the AGGREGATE across every month in that span
+   (e.g. a quarter's repair count is the sum of its 3 months), not just the
+   span's last month with a footnote. The new "2.1 Динамика по месяцам"
+   subsection is what shows the month-by-month breakdown within the span.
+2. **AI summary input stays aggregate-only** (see §16) -- unrelated to
+   period spans directly, but decided in the same round of questions.
+3. **"Previous period" comparison** for a quarter/year means the
+   calendar-previous span of the SAME length (previous quarter / previous
+   year), not the previous single month -- and is only offered when that
+   ENTIRE previous span is present in the file, same "no silent comparison
+   against something narrower" philosophy as the original month-only code.
+
+### Implementation
+
+`analytics/periods.py` gained `PeriodSpan` (kind: month/quarter/year +
+`.months()`/`.previous()`/`.key`/`__str__`), `parse_span_key`,
+`available_spans`, and `select_span` -- all ADDITIONS. The original
+`Period`/`select_periods`/`PeriodSelection`/`assign_periods`/
+`available_periods` are completely untouched and still exercise the exact
+same tested month-pair logic; `select_span`'s default (no requested key)
+resolves to the single latest month, so every pre-existing single-month
+code path is bit-for-bit unaffected -- verified by the full test suite
+staying green (53/53) through this entire change with zero modifications
+needed to any existing test.
+
+`engine.py`'s `build_report()` now filters `current_df`/`previous_df` by
+`periods_series.isin(...)` over every present month of the resolved span,
+rather than equality against one `Period`. Since every analytics/*.py
+section module (categories, regions_asc, manufacturers, tv_analysis,
+iris_defects, fraud, sla_quality, summary) just receives a DataFrame and
+aggregates whatever rows it's given, NONE of them needed to change --
+"aggregate over the whole period" was already the architecture's natural
+behavior once fed a multi-month union instead of one month's rows. This
+is the single biggest reason this generalization was tractable in one
+pass rather than a rewrite: the month-vs-quarter-vs-year distinction lives
+entirely in what rows engine.py hands downstream, not in what the
+downstream modules do with them.
+
+An incomplete span (e.g. a quarter with only 1 of 3 months on file) is
+NOT silently rounded down to "just report that one month" -- it's
+aggregated over whatever IS present, `current_span_complete=False` is set,
+and `previous_note` gets an explicit "внимание, отсутствуют данные за
+..." addendum, consistent with how a missing previous month was already
+handled. Verified: requesting Q3 2026 against a file that only has July
+correctly aggregates to exactly July's 1535 (not silently zero, not
+crashing), and its previous-period comparison correctly falls back to Q2
+2026 (which IS fully present) rather than being disabled outright.
+
+### Sections 10/11's window generalizes too
+
+The spare-parts/tech-support sections' "2-month window" rule (§13/§14) was
+a fixed current+calendar-previous-month pair, reverse-engineered
+specifically for a single-month report. For a quarter/year report, that
+window now expands to the SAME set of present months the rest of the
+report aggregates over (via a new shared `window_df_for_months()` helper
+in both `analytics/parts.py` and `analytics/support.py` -- `period_window_df()`
+is now a thin wrapper over it, kept for the month case with ZERO behavior
+change, still exercised by the existing exact-match tests). This was the
+natural reading of "aggregate over the whole period" applied consistently,
+not a separately-invented rule for these two sections.
+
+### "2.1 Динамика по месяцам за период"
+
+New subsection (HTML/PDF/DOCX), shown only when the span covers more than
+a month AND at least 2 of its months have data (a 1-month result would be
+a table with one row -- not a "dynamic" of anything). Built by literally
+calling the existing `summary.compute_summary()` once per present month
+(`summary.monthly_kpi_table()`) -- no new aggregation logic. Two charts
+(`chart_builder.monthly_trend_bar_chart`, a new simple vertical-bar
+function) show repair count and total sum trending across the span's
+months.
+
+### A pre-existing bug found and fixed along the way
+
+While testing the AI-summary insertion point (§16) I discovered
+`html_builder.py`'s Jinja `Environment` used
+`select_autoescape(["html"])`, which decides whether to autoescape by
+matching the TEMPLATE FILENAME's extension against that list. The
+template is named `report.html.jinja` -- which ends in `.jinja`, not
+`.html` -- so autoescaping was silently never active; every `{{ }}`
+interpolation in the whole report template has always rendered raw,
+unescaped HTML. Harmless while every value came from the trusted .xlsx
+(no `<`/`>`/`&` in practice), but directly relevant once external
+AI-generated text can land in the same template. Fixed by forcing
+`autoescape=True` explicitly rather than relying on the filename match.
+Verified: a summary text containing `<опасными> &` renders as
+`&lt;опасными&gt; &amp;` in the output HTML, and the PDF (weasyprint,
+same HTML) still renders correctly afterward.
+
+Implementation: `analytics/periods.py`, `analytics/summary.py`
+(`MonthlyKpiRow`/`monthly_kpi_table`), `analytics/parts.py`/`support.py`
+(`window_df_for_months`), `charts/chart_builder.py`
+(`monthly_trend_bar_chart`), `engine.py`, `render/chart_pipeline.py`,
+`render/html_builder.py`, `render/templates/report.html.jinja`,
+`render/docx_builder.py`, `ui/main_window.py` (period-kind combo). Tests:
+existing suite unmodified and still passing; new UI-level verification
+was done via a headless GUI script (drive the real MainWindow through
+month -> quarter -> year -> month -> a specific earlier quarter, checking
+`report.current_span`/`.kpis.repair_count` at each step) rather than a
+new pytest file, since the period-selection logic itself has no new
+pytest-level surface beyond what analytics/periods.py's own functions
+already are (a `tests/test_periods.py` addition for `select_span`/
+`PeriodSpan` would be a reasonable follow-up).
+
+## §16. AI-generated executive summary (opt-in) -- 2026-09-13
+
+User request: an optional checkbox ("Провести анализ с помощью ИИ") that,
+when checked, has an AI model write a short (<=2 pages A4) executive
+summary at the very start of the report. The user supplied a working
+example `curl` call against a Yandex Cloud endpoint
+(`https://ai.api.cloud.yandex.net/v1/responses`, `Authorization: Api-Key
+...`, `OpenAI-Project: <folder id>`, `model: "gpt://<folder id>/aliceai-llm/latest"`,
+`instructions`/`input`/`max_output_tokens` fields) including a real API
+key pasted directly in chat.
+
+### IMPORTANT CAVEAT: unverified against the live endpoint
+
+Every environment this was developed and tested in blocks outbound
+network access to `ai.api.cloud.yandex.net` by policy (confirmed via the
+sandbox's own proxy status tool, which reported a 403 `connect_rejected`
+policy denial -- not a bug, not something to route around). This means:
+
+- The exact request encoding was taken directly from the user's own
+  working `curl` example, so that part should be reliable.
+- The RESPONSE shape (`ai/client.py::_extract_text`) could NOT be
+  confirmed against a real call. It's written defensively against the
+  shape the endpoint's URL and field names (`instructions`/`input`/
+  `max_output_tokens`) imply -- OpenAI's Responses API -- trying
+  `output_text` first, then `output[].content[].text`, then falling back
+  to a classic chat-completions `choices[0].message.content` shape, and
+  raising a clear, diagnosable `AIResponseError` (naming the top-level
+  keys actually seen) if none match.
+- **This must be tested for real** (check the checkbox with a real API
+  key configured, generate a report, confirm the summary text actually
+  appears and reads sensibly) before being trusted end-to-end. Everything
+  UP TO the actual network call -- prompt construction, settings storage,
+  UI wiring, graceful-failure rendering in all 3 formats -- was tested
+  fully, by mocking `urllib.request.urlopen` at the exact call boundary
+  (see `tests/test_ai.py` and the headless GUI E2E scripts run during
+  development). If the real endpoint's response doesn't match any parsed
+  shape, the failure is a clean, visible "не удалось получить резюме от
+  ИИ-модели: неожиданный формат ответа (...)" note in the report, not a
+  crash or a silently wrong number -- fix `_extract_text` once the real
+  shape is known.
+
+### Security: the API key
+
+The key pasted in chat was NEVER written into any file that reaches this
+repository. It exists only in the chat transcript (which the user should
+consider rotating if it's a real production key, since a chat transcript
+is not a secrets store). The app stores its OWN copy of whatever key the
+user enters via the "Настройки ИИ" dialog in
+`ai_settings.py::_settings_path()` (`%LOCALAPPDATA%\RepairReportApp\ai_settings.json`
+on Windows) -- same directory family as `profile.py`'s client profiles,
+in plain text (no OS keyring integration -- consistent with this app's
+existing security posture, not a new gap introduced here), `chmod 600`'d
+best-effort on POSIX, and NEVER bundled by PyInstaller (it's not under
+`repair_report/`, and nothing reads it except `ai_settings.py` itself at
+runtime from the user's own machine).
+
+### What data leaves the network (product decision, confirmed with the user)
+
+Only AGGREGATED figures and the report's own already-computed narrative
+blurbs (`ai/summary.py::build_digest`) -- total counts/sums, per-month
+subtotals, top-5 equipment categories by sum, leader/follower text,
+golden-standard/risk-zone/DOA/fraud COUNTS. Never section 12's per-repair
+detail rows, customer names, serial numbers, or phone numbers -- the
+digest is built directly from `ReportData`'s summary objects, which never
+carry that level of detail in the first place, so there's no accidental
+path for it to leak in.
+
+### Where it renders
+
+A new unnumbered "Резюме (подготовлено с помощью ИИ)" section at the very
+top of the report (HTML/PDF/DOCX), before "1. Реестры...", clearly
+labelled as AI-generated with a standing disclaimer ("требует проверки
+перед использованием") so it's never mistaken for a human-verified
+figure. On failure, the SAME heading appears with a plain-language
+failure note instead (see the "ERROR:" convention below) -- the rest of
+the report still generates normally either way; an AI failure must never
+block the actual data-driven report.
+
+### The "ERROR:" convention
+
+`ReportData.ai_summary` is `None` (not requested), the model's text, or a
+string starting literally with `"ERROR:"` (set by
+`ui/worker.py::ReportWorker._generate_ai_summary`, which catches
+`AIRequestError`/`AIResponseError`/anything else around the network call
+so a failure there can never abort the whole report). `html_builder.py`/
+`docx_builder.py` both check for that prefix and render the remainder as
+a visible failure note rather than silently dropping the section --
+same "explicit honesty over silent failure" pattern used everywhere else
+in this codebase (missing previous period, missing parts/support data
+for the window, etc.).
+
+### The "<=2 pages A4" constraint
+
+Enforced two ways: `max_output_tokens=1500` in the request (matching the
+user's own example), and a hard backstop
+(`ai/summary.py::MAX_SUMMARY_CHARS = 11_000`) that truncates on a word
+boundary and appends a visible "[Резюме обрезано...]" note if the model
+overshoots anyway -- token limits are an imprecise proxy for page count
+across languages/models, so a text-length safety net is cheap insurance
+against a summary silently running to 5 pages.
+
+Implementation: `ai_settings.py` (storage), `ai/client.py` (HTTP,
+stdlib-only via `urllib` -- no new dependency for one optional feature),
+`ai/summary.py` (prompt/digest + orchestration), `ui/ai_settings_dialog.py`,
+`ui/main_window.py` (checkbox + "Настроить ИИ…" button), `ui/worker.py`
+(`ReportWorker._generate_ai_summary`), `render/html_builder.py`/
+`docx_builder.py`/`report.html.jinja` (rendering + the ERROR: convention).
+Tests: `tests/test_ai.py` (12 tests, all mocked at the `urllib.request.urlopen`
+boundary -- settings validation, all 3 response-shape parsers, the
+truncation backstop, digest content). End-to-end verified via headless
+GUI scripts: full report generation with the AI call mocked to succeed
+(summary text confirmed present in the output HTML) and mocked to fail
+with a network error (report still generates successfully, with the
+graceful failure note present in the output HTML instead of a crash).

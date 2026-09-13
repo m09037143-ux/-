@@ -59,6 +59,7 @@ class ReportWorker(QObject):
         work_dir: str,
         parts_path: str | None = None,
         support_path: str | None = None,
+        ai_settings=None,  # AiSettings | None -- see repair_report.ai_settings; None = AI summary not requested
     ):
         super().__init__()
         self.file_path = file_path
@@ -69,6 +70,7 @@ class ReportWorker(QObject):
         self.work_dir = work_dir
         self.parts_path = parts_path
         self.support_path = support_path
+        self.ai_settings = ai_settings
 
     def run(self):
         try:
@@ -79,6 +81,10 @@ class ReportWorker(QObject):
             self.progress.emit("Агрегация показателей…")
             # (aggregation already happened inside build_report; this stage
             # message is shown for UX continuity with the spec's staged flow)
+
+            if self.ai_settings is not None:
+                self.progress.emit("Формирование ИИ-резюме…")
+                report.ai_summary = self._generate_ai_summary(report)
 
             self.progress.emit("Построение графиков…")
             from repair_report.render.chart_pipeline import generate_charts
@@ -115,3 +121,19 @@ class ReportWorker(QObject):
             self.finished.emit(written)
         except Exception as e:  # noqa: BLE001
             self.failed.emit(f"Ошибка при формировании отчёта: {e}")
+
+    def _generate_ai_summary(self, report: ReportData) -> str:
+        """Never raises -- an AI failure (bad key, network down, unexpected
+        response, timeout) must not abort report generation. Returns either
+        the summary text or an "ERROR: ..." string that html_builder.py/
+        docx_builder.py render as a visible, honest failure note instead of
+        silently omitting the section (see docs/REVERSE_ENGINEERING.md §16)."""
+        from repair_report.ai.client import AIRequestError, AIResponseError
+        from repair_report.ai.summary import generate_summary
+
+        try:
+            return generate_summary(report, self.ai_settings)
+        except (AIRequestError, AIResponseError) as e:
+            return f"ERROR: {e}"
+        except Exception as e:  # noqa: BLE001 -- an AI failure must never abort the whole report
+            return f"ERROR: непредвиденная ошибка при обращении к ИИ ({e})"

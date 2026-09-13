@@ -26,8 +26,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from repair_report import ai_settings as ai_settings_store
 from repair_report import profile as profile_store
 from repair_report.analytics.periods import MONTH_NAMES_RU
+from repair_report.ui.ai_settings_dialog import AiSettingsDialog
 from repair_report.ui.profile_dialog import ProfileDialog
 from repair_report.ui.worker import ProbeWorker, ReportWorker
 
@@ -168,6 +170,18 @@ class MainWindow(QMainWindow):
             format_layout.addWidget(cb)
         layout.addWidget(format_group)
 
+        # --- AI summary (optional) ---
+        ai_group = QGroupBox("5. ИИ-анализ (опционально)")
+        ai_layout = QHBoxLayout(ai_group)
+        self.ai_summary_checkbox = QCheckBox("Провести анализ с помощью ИИ (краткое резюме)")
+        self._ai_settings = ai_settings_store.load_ai_settings()
+        self.ai_summary_checkbox.setChecked(self._ai_settings.enabled_by_default)
+        ai_layout.addWidget(self.ai_summary_checkbox, stretch=1)
+        ai_settings_btn = QPushButton("Настроить ИИ…")
+        ai_settings_btn.clicked.connect(self._edit_ai_settings)
+        ai_layout.addWidget(ai_settings_btn)
+        layout.addWidget(ai_group)
+
         # --- Generate ---
         self.generate_btn = QPushButton("Сформировать отчёт")
         self.generate_btn.setEnabled(False)
@@ -229,6 +243,16 @@ class MainWindow(QMainWindow):
 
             return ClientProfile(name="(без профиля)")
         return profile_store.load_profile(name)
+
+    # ---- AI settings ----
+    def _edit_ai_settings(self):
+        dlg = AiSettingsDialog(self, self._ai_settings)
+        if dlg.exec():
+            new_settings = dlg.result_settings()
+            if new_settings:
+                ai_settings_store.save_ai_settings(new_settings)
+                self._ai_settings = new_settings
+                self.ai_summary_checkbox.setChecked(new_settings.enabled_by_default)
 
     # ---- file loading ----
     def _pick_file(self):
@@ -409,6 +433,16 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Формат не выбран", "Выберите хотя бы один формат выгрузки (PDF/DOCX/HTML).")
             return
 
+        ai_enabled = self.ai_summary_checkbox.isChecked()
+        if ai_enabled and not self._ai_settings.is_configured():
+            QMessageBox.warning(
+                self,
+                "ИИ-анализ не настроен",
+                "Чтобы провести анализ с помощью ИИ, сначала заполните API-ключ и Folder ID "
+                "в «Настроить ИИ…», либо снимите галочку.",
+            )
+            return
+
         span = self.report.current_span
         if span.kind == "month":
             default_name = f"Final_Report_{span.year}_{MONTH_NAMES_RU[span.index]}"
@@ -439,6 +473,7 @@ class MainWindow(QMainWindow):
             self.work_dir,
             self.parts_file_path,
             self.support_file_path,
+            ai_settings=self._ai_settings if ai_enabled else None,
         )
         report_worker.moveToThread(report_thread)
         report_thread.started.connect(report_worker.run)
