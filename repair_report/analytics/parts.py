@@ -66,6 +66,24 @@ def extract_city(address: object) -> str | None:
     return parts[0] if parts else None
 
 
+def window_df_for_months(parts_df: pd.DataFrame, months: list[Period]) -> pd.DataFrame:
+    """Filter to any explicit list of calendar months (in the config's
+    period_field). Used directly for a quarter/year report span (see
+    engine.py); period_window_df below is the original current+previous
+    2-month case, now just a thin wrapper over this."""
+    cfg = loader.parts_config()
+    field = cfg["period_field"]
+    dates = parts_df[field]
+
+    def in_window(ts) -> bool:
+        if pd.isna(ts):
+            return False
+        return any(ts.year == p.year and ts.month == p.month for p in months)
+
+    mask = dates.apply(in_window)
+    return parts_df[mask].copy()
+
+
 def period_window_df(parts_df: pd.DataFrame, current: Period, previous: Period | None) -> tuple[pd.DataFrame, list[Period]]:
     """Filter to the current+previous month window (§13: section 10 covers
     both months together, not just the current one). Returns (filtered_df,
@@ -73,18 +91,8 @@ def period_window_df(parts_df: pd.DataFrame, current: Period, previous: Period |
     and only includes periods that are both in [previous, current] AND
     actually have at least one date field parsed (skips entirely if the
     parts file simply doesn't cover this month, rather than crashing)."""
-    cfg = loader.parts_config()
-    field = cfg["period_field"]
-    dates = parts_df[field]
     window_periods = [p for p in (previous, current) if p is not None]
-
-    def in_window(ts) -> bool:
-        if pd.isna(ts):
-            return False
-        return any(ts.year == p.year and ts.month == p.month for p in window_periods)
-
-    mask = dates.apply(in_window)
-    return parts_df[mask].copy(), window_periods
+    return window_df_for_months(parts_df, window_periods), window_periods
 
 
 @dataclass

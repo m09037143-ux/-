@@ -88,7 +88,7 @@ def save_docx(
     run.bold = True
     run.font.size = Pt(18)
 
-    doc.add_paragraph(f"Период: {report.current_period}\nСформирован: {datetime.date.today().strftime('%d.%m.%Y')}")
+    doc.add_paragraph(f"Период: {report.current_span}\nСформирован: {datetime.date.today().strftime('%d.%m.%Y')}")
 
     header_tbl = doc.add_table(rows=3, cols=2)
     header_tbl.rows[0].cells[0].text = "Исполнитель"
@@ -100,6 +100,27 @@ def save_docx(
 
     if not report.previous_available:
         doc.add_paragraph(report.previous_note).italic = True
+
+    # AI summary -- see repair_report/ai/ and docs/REVERSE_ENGINEERING.md
+    # §16. report.ai_summary is set by the UI layer, never by engine.py
+    # itself; a string starting with "ERROR:" means generation failed and
+    # is shown as such rather than silently dropped.
+    if report.ai_summary:
+        _heading(doc, "Резюме (подготовлено с помощью ИИ)")
+        if report.ai_summary.startswith("ERROR:"):
+            doc.add_paragraph(
+                f"Не удалось получить резюме от ИИ-модели: {report.ai_summary[len('ERROR:'):].strip()}. "
+                "Остальная часть отчёта сформирована в обычном режиме."
+            ).italic = True
+        else:
+            for para in report.ai_summary.split("\n\n"):
+                if para.strip():
+                    doc.add_paragraph(para.strip())
+            doc.add_paragraph(
+                "Резюме сформировано автоматически ИИ-моделью на основе агрегированных показателей отчёта "
+                "и требует проверки перед использованием."
+            ).italic = True
+        doc.add_page_break()
 
     # Section 1
     _heading(doc, "1. Реестры текущего отчетного периода")
@@ -142,6 +163,33 @@ def save_docx(
     ]
     _add_table(doc, ["Показатель", "Текущий", "Предыдущий", "Динамика"], kpi_rows)
     doc.add_picture(charts["section2_pie"], width=Inches(4.5))
+
+    # 2.1 -- only for a quarter/year span with >=2 present months (see
+    # engine.py / analytics/summary.py)
+    if report.monthly_dynamics:
+        _heading(doc, "2.1 Динамика по месяцам за период", level=2)
+        if not report.current_span_complete:
+            doc.add_paragraph("В выбранном периоде данные представлены не за все месяцы — см. примечание выше.").italic = True
+        _add_table(
+            doc,
+            ["Месяц", "Кол-во ремонтов", "Сумма", "Средний чек", "Выездов", "Сумма выездов", "АСЦ"],
+            [
+                [
+                    str(r.period),
+                    format_number(r.repair_count),
+                    format_rub(r.total_sum),
+                    format_rub(r.avg_check),
+                    format_number(r.visits_count),
+                    format_rub(r.visits_sum),
+                    r.asc_count,
+                ]
+                for r in report.monthly_dynamics
+            ],
+        )
+        if "period_dynamics_count" in charts:
+            doc.add_picture(charts["period_dynamics_count"], width=Inches(6))
+        if "period_dynamics_sum" in charts:
+            doc.add_picture(charts["period_dynamics_sum"], width=Inches(6))
 
     # Section 3
     doc.add_page_break()

@@ -64,7 +64,17 @@
 <p class="placeholder">{{ previous_note }}</p>
 {% endif %}
 
-<h2>1. Реестры текущего отчетного периода</h2>
+{% if ai_summary_paragraphs %}
+<h2>Резюме (подготовлено с помощью ИИ)</h2>
+{% for para in ai_summary_paragraphs %}<p>{{ para }}</p>
+{% endfor %}
+<p class="small-note">Резюме сформировано автоматически ИИ-моделью на основе агрегированных показателей отчёта и требует проверки перед использованием.</p>
+{% elif ai_summary_error %}
+<h2>Резюме (подготовлено с помощью ИИ)</h2>
+<p class="placeholder">Не удалось получить резюме от ИИ-модели: {{ ai_summary_error }}. Остальная часть отчёта сформирована в обычном режиме.</p>
+{% endif %}
+
+<h2{% if ai_summary_paragraphs or ai_summary_error %} class="page-break"{% endif %}>1. Реестры текущего отчетного периода</h2>
 <p>Ниже представлены списки участников отчета и обслуживаемой техники.</p>
 
 <h3>1.1 Список сервисных центров</h3>
@@ -94,6 +104,29 @@
 </table>
 
 <div class="chart"><img src="{{ charts.section2_pie }}" alt="Структура затрат"></div>
+
+{% if monthly_dynamics %}
+<h3>2.1 Динамика по месяцам за период</h3>
+{% if not current_span_complete %}
+<p class="placeholder">В выбранном периоде данные представлены не за все месяцы — см. примечание выше.</p>
+{% endif %}
+<table>
+  <tr><th>Месяц</th><th>Кол-во ремонтов</th><th>Сумма</th><th>Средний чек</th><th>Выездов</th><th>Сумма выездов</th><th>АСЦ</th></tr>
+  {% for r in monthly_dynamics %}
+  <tr>
+    <td>{{ r.month }}</td>
+    <td class="num">{{ r.repair_count }}</td>
+    <td class="num">{{ r.total_sum }}</td>
+    <td class="num">{{ r.avg_check }}</td>
+    <td class="num">{{ r.visits_count }}</td>
+    <td class="num">{{ r.visits_sum }}</td>
+    <td class="num">{{ r.asc_count }}</td>
+  </tr>
+  {% endfor %}
+</table>
+<div class="chart"><img src="{{ charts.period_dynamics_count }}" alt="Динамика количества ремонтов по месяцам"></div>
+<div class="chart"><img src="{{ charts.period_dynamics_sum }}" alt="Динамика суммы по месяцам"></div>
+{% endif %}
 
 <h2>3. Структура затрат по видам техники</h2>
 <h3>Затраты по категориям</h3>

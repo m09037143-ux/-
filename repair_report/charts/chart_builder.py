@@ -139,6 +139,36 @@ def stacked_vertical_bar_chart(
     plt.close(fig)
 
 
+def monthly_trend_bar_chart(
+    out_path: str,
+    x_labels: list[str],
+    values: list[float],
+    value_format: str = "int",  # "int" | "rub"
+    color: str | None = None,
+    title: str | None = None,
+) -> None:
+    """Simple vertical bar chart, one bar per month, value label above each
+    bar -- used by the '2.1 Динамика по месяцам' subsection (quarter/year
+    report spans) to show a single KPI's trend across the months making up
+    the selected period. Deliberately NOT stacked/grouped (unlike
+    stacked_vertical_bar_chart) since each call here is one metric."""
+    color = color or PALETTE[0]
+    fig, ax = plt.subplots(figsize=(7, 4), dpi=DPI)
+    ax.bar(x_labels, values, color=color, width=0.55)
+    max_val = max(values) if values else 0
+    for i, v in enumerate(values):
+        label = _format_thousands(v) + (" ₽" if value_format == "rub" else "")
+        ax.text(i, v + max_val * 0.02, label, ha="center", fontsize=8)
+    ax.set_ylim(0, max_val * 1.18 if max_val else 1)
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(_format_thousands))
+    ax.spines[["top", "right"]].set_visible(False)
+    if title:
+        ax.set_title(title, fontsize=11, loc="left")
+    fig.tight_layout()
+    fig.savefig(out_path)
+    plt.close(fig)
+
+
 def threshold_colored_bar_chart(
     out_path: str,
     labels: list[str],

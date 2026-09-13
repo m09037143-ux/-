@@ -366,8 +366,13 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Формат не выбран", "Выберите хотя бы один формат выгрузки (PDF/DOCX/HTML).")
             return
 
-        period = self.report.current_period
-        default_name = f"Final_Report_{period.year}_{MONTH_NAMES_RU[period.month]}"
+        span = self.report.current_span
+        if span.kind == "month":
+            default_name = f"Final_Report_{span.year}_{MONTH_NAMES_RU[span.index]}"
+        elif span.kind == "quarter":
+            default_name = f"Final_Report_{span.year}_Q{span.index}"
+        else:
+            default_name = f"Final_Report_{span.year}_год"
         out_dir = QFileDialog.getExistingDirectory(self, "Куда сохранить отчёт?")
         if not out_dir:
             return

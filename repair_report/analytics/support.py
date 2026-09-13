@@ -22,20 +22,28 @@ from repair_report.analytics.periods import Period
 from repair_report.config import loader
 
 
-def period_window_df(support_df: pd.DataFrame, current: Period, previous: Period | None) -> tuple[pd.DataFrame, list[Period]]:
-    """Same 2-month (current + calendar-previous) window as analytics/parts.py."""
+def window_df_for_months(support_df: pd.DataFrame, months: list[Period]) -> pd.DataFrame:
+    """Filter to any explicit list of calendar months (in the config's
+    period_field). Used directly for a quarter/year report span (see
+    engine.py); period_window_df below is the original current+previous
+    2-month case, now just a thin wrapper over this."""
     cfg = loader.support_config()
     field = cfg["period_field"]
     dates = support_df[field]
-    window_periods = [p for p in (previous, current) if p is not None]
 
     def in_window(ts) -> bool:
         if pd.isna(ts):
             return False
-        return any(ts.year == p.year and ts.month == p.month for p in window_periods)
+        return any(ts.year == p.year and ts.month == p.month for p in months)
 
     mask = dates.apply(in_window)
-    return support_df[mask].copy(), window_periods
+    return support_df[mask].copy()
+
+
+def period_window_df(support_df: pd.DataFrame, current: Period, previous: Period | None) -> tuple[pd.DataFrame, list[Period]]:
+    """Same 2-month (current + calendar-previous) window as analytics/parts.py."""
+    window_periods = [p for p in (previous, current) if p is not None]
+    return window_df_for_months(support_df, window_periods), window_periods
 
 
 @dataclass

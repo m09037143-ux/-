@@ -9,11 +9,10 @@ import base64
 import dataclasses
 from pathlib import Path
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2 import Environment, FileSystemLoader
 
 from repair_report.analytics.common import format_dynamics, format_number, format_rub, repair_level_label
 from repair_report.analytics.engine import ReportData
-from repair_report.analytics.periods import MONTH_NAMES_RU
 from repair_report.config import loader
 from repair_report.profile import ClientProfile
 from repair_report.render.chart_pipeline import generate_charts
@@ -34,6 +33,36 @@ def _detail_columns():
     from repair_report.analytics.detail import DETAIL_COLUMNS
 
     return [label for _, label in DETAIL_COLUMNS]
+
+
+def _build_monthly_dynamics_context(report: ReportData) -> list[dict] | None:
+    if not report.monthly_dynamics:
+        return None
+    return [
+        {
+            "month": str(r.period),
+            "repair_count": format_number(r.repair_count),
+            "total_sum": format_rub(r.total_sum),
+            "avg_check": format_rub(r.avg_check),
+            "visits_count": format_number(r.visits_count),
+            "visits_sum": format_rub(r.visits_sum),
+            "asc_count": r.asc_count,
+        }
+        for r in report.monthly_dynamics
+    ]
+
+
+def _build_ai_summary_context(report: ReportData) -> dict:
+    """`report.ai_summary` is set by the UI layer (see repair_report/ai/) --
+    either the model's text, or (by convention) a string starting with
+    "ERROR:" when generation failed, so the failure is shown in the report
+    itself rather than silently dropped. See docs/REVERSE_ENGINEERING.md §16."""
+    if not report.ai_summary:
+        return {"ai_summary_paragraphs": None, "ai_summary_error": None}
+    if report.ai_summary.startswith("ERROR:"):
+        return {"ai_summary_paragraphs": None, "ai_summary_error": report.ai_summary[len("ERROR:") :].strip()}
+    paragraphs = [p.strip() for p in report.ai_summary.split("\n\n") if p.strip()]
+    return {"ai_summary_paragraphs": paragraphs, "ai_summary_error": None}
 
 
 def _build_parts_context(report: ReportData) -> dict | None:
@@ -161,20 +190,30 @@ def build_html(report: ReportData, profile: ClientProfile, work_dir: str | Path,
         for r in report.asc_visits.top(settings["top_n_asc_visits"])
     ]
 
-    env = Environment(loader=FileSystemLoader(str(TEMPLATE_DIR)), autoescape=select_autoescape(["html"]))
+    # NOTE: select_autoescape(["html"]) would NOT actually enable escaping
+    # here -- it matches by template filename extension, and this template
+    # is named "report.html.jinja" (ends in .jinja, not .html), so it was
+    # silently a no-op. Harmless while every interpolated value came from
+    # the trusted .xlsx, but now that an external AI-generated summary (see
+    # ai_summary_paragraphs) can land in this template too, force real
+    # autoescaping explicitly rather than relying on the filename match.
+    env = Environment(loader=FileSystemLoader(str(TEMPLATE_DIR)), autoescape=True)
     env.globals["format_number"] = format_number
     env.globals["format_rub"] = format_rub
     env.globals["format_dynamics"] = lambda cur, prev: dyn(cur, prev)
     template = env.get_template("report.html.jinja")
 
-    period = report.current_period
+    period = report.current_span
     context = dict(
-        report_title=f"Отчёт {period.year} {MONTH_NAMES_RU[period.month]}",
+        report_title=f"Отчёт {period}",
         period_label=str(period),
         generated_date=__import__("datetime").date.today().strftime("%d.%m.%Y"),
         profile=profile,
         previous_available=report.previous_available,
         previous_note=report.previous_note,
+        current_span_complete=report.current_span_complete,
+        monthly_dynamics=_build_monthly_dynamics_context(report),
+        **_build_ai_summary_context(report),
         asc_registry=report.asc_registry,
         equipment_registry=report.equipment_registry,
         summary_narrative=summary_narrative,

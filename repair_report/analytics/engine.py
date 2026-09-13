@@ -25,7 +25,7 @@ from repair_report.analytics import (
     support,
     tv_analysis,
 )
-from repair_report.analytics.periods import Period, PeriodSelection, assign_periods, available_periods, select_periods
+from repair_report.analytics.periods import Period, PeriodSpan, assign_periods, available_periods, select_span
 from repair_report.analytics.regions_asc import LeaderFollowerText, leader_follower_from_dynamics, leader_follower_from_visits
 from repair_report.analytics.tables import DynamicsTable
 from repair_report.ingest.excel_reader import ColumnReport, load_repair_data
@@ -62,10 +62,11 @@ class SupportSection:
 
 @dataclass
 class ReportData:
-    current_period: Period
-    previous_period: Period | None
+    current_span: PeriodSpan
+    previous_span: PeriodSpan | None
     previous_available: bool
     previous_note: str
+    current_span_complete: bool
     all_periods: list[Period]
 
     column_report: ColumnReport
@@ -123,6 +124,20 @@ class ReportData:
     from the report, same pattern as `parts` above (see
     docs/REVERSE_ENGINEERING.md §14)."""
 
+    monthly_dynamics: list[summary.MonthlyKpiRow] | None = None
+    """'2.1 Динамика по месяцам' -- populated only when current_span covers
+    more than one calendar month (quarter/year) AND at least 2 of its
+    months actually have data; otherwise None and the subsection is
+    omitted (see docs/REVERSE_ENGINEERING.md §15)."""
+
+    ai_summary: str | None = None
+    """Optional ИИ-generated executive summary (see repair_report/ai/), set
+    by the UI layer AFTER build_report() returns -- engine.py itself never
+    makes network calls, staying a plain offline-testable library. None
+    means no summary was requested, or generation failed (in which case a
+    human-readable failure note is placed here instead by the caller, never
+    silently dropped)."""
+
 
 def build_report(
     path: str,
@@ -134,15 +149,14 @@ def build_report(
     periods_series = assign_periods(df)
     all_periods = available_periods(periods_series)
 
-    requested_period = None
-    if requested_period_key:
-        year, month = (int(x) for x in requested_period_key.split("-"))
-        requested_period = Period(year, month)
+    selection = select_span(all_periods, requested_period_key)
 
-    selection: PeriodSelection = select_periods(all_periods, requested_period)
+    current_df = df[periods_series.isin(selection.current_present_months)]
+    previous_df = df[periods_series.isin(selection.previous.months())] if selection.previous_available else None
 
-    current_df = df[periods_series == selection.current]
-    previous_df = df[periods_series == selection.previous] if selection.previous_available else None
+    monthly_dynamics = None
+    if selection.current.kind != "month" and len(selection.current_present_months) >= 2:
+        monthly_dynamics = summary.monthly_kpi_table(df, selection.current_present_months, periods_series)
 
     kpis = summary.compute_summary(current_df)
     kpis_prev = summary.compute_summary(previous_df) if previous_df is not None else None
@@ -165,15 +179,30 @@ def build_report(
     defect_texts = iris_defects.defect_text_table(current_df)
     iris_errors = iris_defects.iris_errors_table(current_df)
 
+    # Sections 10/11's "window" of months: for a single-month report this is
+    # the original current+calendar-previous-month pair (unchanged, exactly
+    # as reverse-engineered against the reference report -- see §13/§14).
+    # For a quarter/year report it's every present month of that SAME span
+    # the rest of the report aggregates over, per the "aggregate over the
+    # whole period" product decision (docs/REVERSE_ENGINEERING.md §15) --
+    # not a separately re-derived 2-month rule.
+    if selection.current.kind == "month":
+        window_months = selection.current_present_months + (
+            selection.previous.months() if selection.previous_available else []
+        )
+        window_months = sorted(set(window_months), key=lambda p: (p.year, p.month))
+    else:
+        window_months = selection.current_present_months
+
     parts_section = None
     if parts_path:
         parts_df, parts_column_report = load_parts_data(parts_path)
-        window_df, window_periods = parts.period_window_df(parts_df, selection.current, selection.previous)
+        window_df = parts.window_df_for_months(parts_df, window_months)
         parts_section = PartsSection(
             column_report=parts_column_report,
-            window_periods=window_periods,
+            window_periods=window_months,
             summary=parts.compute_summary(window_df),
-            status_by_month=parts.status_by_month_table(window_df, window_periods),
+            status_by_month=parts.status_by_month_table(window_df, window_months),
             geography=parts.geography_table(window_df),
             has_data_for_window=len(window_df) > 0,
         )
@@ -181,7 +210,8 @@ def build_report(
     support_section = None
     if support_path:
         support_df, support_column_report = load_support_data(support_path)
-        sup_window_df, sup_window_periods = support.period_window_df(support_df, selection.current, selection.previous)
+        sup_window_df = support.window_df_for_months(support_df, window_months)
+        sup_window_periods = window_months
         support_section = SupportSection(
             column_report=support_column_report,
             window_periods=sup_window_periods,
@@ -193,11 +223,13 @@ def build_report(
         )
 
     return ReportData(
-        current_period=selection.current,
-        previous_period=selection.previous,
+        current_span=selection.current,
+        previous_span=selection.previous if selection.previous_available else None,
         previous_available=selection.previous_available,
         previous_note=selection.note,
+        current_span_complete=selection.current_complete,
         all_periods=all_periods,
+        monthly_dynamics=monthly_dynamics,
         column_report=column_report,
         asc_registry=registries.asc_registry(current_df),
         equipment_registry=registries.equipment_registry(current_df),

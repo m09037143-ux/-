@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from repair_report.analytics.common import fill_missing_categoricals
+from repair_report.analytics.periods import Period
 
 
 @dataclass
@@ -52,3 +53,42 @@ def compute_summary(df: pd.DataFrame) -> SummaryKpis:
         parts_count=len(parts),
         parts_sum=float(parts["parts_compensation"].sum()),
     )
+
+
+@dataclass
+class MonthlyKpiRow:
+    """One row of the '2.1 Динамика по месяцам' subsection -- shown only
+    when the selected report period spans more than one calendar month
+    (quarter/year). Built by simply re-running compute_summary() on each
+    present month individually; no new aggregation logic needed."""
+
+    period: Period
+    repair_count: int
+    total_sum: float
+    avg_check: float
+    visits_count: int
+    visits_sum: float
+    asc_count: int
+
+
+def monthly_kpi_table(df: pd.DataFrame, months: list[Period], periods_series: pd.Series) -> list[MonthlyKpiRow]:
+    """`df`/`periods_series` are the FULL (unfiltered-by-period) frame and its
+    per-row Period assignment (as returned by assign_periods) -- this filters
+    to each month in `months` in turn, so the caller doesn't need to slice
+    per month itself."""
+    rows = []
+    for m in months:
+        sub = df[periods_series == m]
+        k = compute_summary(sub)
+        rows.append(
+            MonthlyKpiRow(
+                period=m,
+                repair_count=k.repair_count,
+                total_sum=k.total_sum,
+                avg_check=k.avg_check,
+                visits_count=k.visits_count,
+                visits_sum=k.visits_sum,
+                asc_count=k.asc_count,
+            )
+        )
+    return rows

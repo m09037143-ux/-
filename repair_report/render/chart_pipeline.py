@@ -79,4 +79,16 @@ def generate_charts(report: ReportData, out_dir: str | Path) -> dict[str, str]:
         bar("section11_1_orgs", report.support.organizations, name_attr="organization", value_attr="count", n=top_n)
         bar("section11_3_topics", report.support.topics, name_attr="topic", value_attr="count", n=top_n)
 
+    # Section 2.1 -- monthly dynamics, only for a quarter/year report span
+    # with >=2 present months (see engine.py / analytics/summary.py)
+    if report.monthly_dynamics:
+        months = [str(r.period) for r in report.monthly_dynamics]
+        p1 = out_dir / "period_dynamics_count.png"
+        cb.monthly_trend_bar_chart(str(p1), months, [r.repair_count for r in report.monthly_dynamics], value_format="int")
+        paths["period_dynamics_count"] = str(p1)
+
+        p2 = out_dir / "period_dynamics_sum.png"
+        cb.monthly_trend_bar_chart(str(p2), months, [r.total_sum for r in report.monthly_dynamics], value_format="rub", color=cb.PALETTE[2])
+        paths["period_dynamics_sum"] = str(p2)
+
     return paths
