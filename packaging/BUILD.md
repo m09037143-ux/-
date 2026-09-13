@@ -36,16 +36,30 @@ the trade-off if you're unsure which to pick.
 - **WeasyPrint's native dependencies.** WeasyPrint (used for PDF export)
   depends on Pango/GObject/HarfBuzz/FontConfig, which are not pure-Python
   and are the single most common source of "it works on my dev machine,
-  not on the built .exe" pain for this stack. On Windows you need the
-  GTK3 runtime libraries on the PATH before building AND (unless you do
-  the DLL-bundling step below) on the target machine too. The simplest
-  option: install the standalone **"GTK3 runtime for Windows"** installer
-  (search for `gtk3-runtime` releases, e.g. the
-  tschoonj/GTK-for-Windows-Runtime-Environment-Installer project, or
-  `choco install gtk-runtime`), then confirm `python -c "import weasyprint"`
-  works in a plain `cmd.exe` before attempting to freeze it. If that
-  import fails, the .exe will fail the same way, just with a less obvious
-  error.
+  not on the built .exe" pain for this stack. On Windows you need these
+  on the PATH before building AND (unless you do the DLL-bundling step
+  below) on the target machine too.
+  - **Do NOT use `choco install gtk-runtime`** -- despite the name, that
+    package installs **GTK2** (v2.24.10 from 2012, an old SourceForge
+    build), not GTK3. It "succeeds" and even lets `import weasyprint`
+    work in some cases, but produces a `.exe` that fails on a clean
+    machine (this was tried and shipped once, then caught by the CI
+    sanity-check step described below).
+  - Use **MSYS2 + pacman** instead -- this is WeasyPrint's own documented
+    route for Windows (see
+    https://doc.courtbouillon.org/weasyprint/stable/first_steps.html#windows).
+    Install MSYS2 (msys2.org, or `choco install msys2`), then from an
+    MSYS2 MINGW64 shell:
+    ```
+    pacman -Syu --noconfirm      # may need running twice on a fresh install
+    pacman -S --noconfirm mingw-w64-x86_64-pango
+    ```
+    This installs a real GObject/Pango/HarfBuzz/FontConfig build under
+    `<msys2 install dir>\mingw64\bin` (e.g. `C:\msys64\mingw64\bin`).
+    Confirm `python -c "import weasyprint"` works in a plain `cmd.exe`
+    (with that `mingw64\bin` directory on PATH) before attempting to
+    freeze it. If that import fails, the .exe will fail the same way,
+    just with a less obvious error.
   - If bundling GTK turns out to be impractical for the actual release
     machine, the fallback documented in the product spec is acceptable:
     generate DOCX via python-docx (already implemented, no native deps) and
@@ -60,23 +74,23 @@ the trade-off if you're unsure which to pick.
   Python import, so PyInstaller's static analysis can't see them and
   won't bundle them unless told to. Both `.spec` files read a
   `GTK_RUNTIME_BIN` environment variable and bundle every `.dll` in it if
-  set. Before running `pyinstaller`, set it to your GTK3 runtime's `bin`
-  directory, e.g. (PowerShell):
+  set. Before running `pyinstaller`, set it to the MSYS2 `mingw64\bin`
+  directory from the step above, e.g. (PowerShell):
   ```powershell
-  $env:GTK_RUNTIME_BIN = "C:\Program Files\GTK3-Runtime Win64\bin"
+  $env:GTK_RUNTIME_BIN = "C:\msys64\mingw64\bin"
   ```
-  (adjust the path to wherever your installer put it -- search for
+  (adjust the path to wherever your MSYS2 install put it -- search for
   `libgobject-2.0-0.dll` if unsure, but double-check the match: some
   Windows images/machines carry a STALE **GTK2**-Runtime elsewhere on
   disk that also has a same-named file, which looks like a match but
   doesn't actually work -- confirm the directory you pick also has
-  `libpango-1.0-0.dll` next to it, and that the path says "GTK3", not
-  "GTK2". This exact mix-up broke the first attempt at this fix, caught
-  by the sanity-check step below rather than shipped silently). The
-  GitHub Actions workflow does this automatically (it locates the DLLs
-  after `choco install gtk-runtime`, filters out any GTK2 match, and
-  exports the variable itself) -- this step is only needed when building
-  by hand.
+  `libpango-1.0-0.dll` next to it, and that the path says "mingw64", not
+  "GTK2". Two different wrong guesses here broke the first two attempts
+  at this fix, both caught by the sanity-check step below rather than
+  shipped silently). The GitHub Actions workflow does this automatically
+  (via `msys2/setup-msys2` + `pacman -S mingw-w64-x86_64-pango`, then
+  locating and exporting the resulting directory) -- this step is only
+  needed when building by hand.
   - **If you see `Ошибка при формировании отчёта: cannot load library
     'libgobject-2.0-0': error 0x7e ... ctypes.util.find_library() did not
     manage to locate a library called 'libgobject-2.0-0'`** when running

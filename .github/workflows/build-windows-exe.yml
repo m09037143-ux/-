@@ -31,48 +31,65 @@ jobs:
       # native DLLs on Windows -- see packaging/BUILD.md's GTK3-runtime
       # caveat. These are loaded via ctypes.util.find_library() at RUNTIME,
       # not a normal Python import, so PyInstaller's static analysis can't
-      # see them and won't bundle them on its own (this is exactly what
-      # produced "cannot load library 'libgobject-2.0-0'" on a clean
-      # Windows machine the first time this was built). Installing GTK
-      # here lets the build machine import weasyprint at all; the next
-      # step finds the resulting DLLs so the .spec can bundle them INTO
-      # the .exe, so an end user's machine doesn't need GTK installed too.
-      - name: Install WeasyPrint native dependencies (GTK3 runtime)
-        run: choco install gtk-runtime -y --no-progress
+      # see them and won't bundle them on its own.
+      #
+      # Two things were tried and rejected here before this one, kept as a
+      # cautionary note since the names are misleading:
+      #   1. `choco install gtk-runtime` -- despite the name, this
+      #      chocolatey package installs **GTK2** (v2.24.10 from 2012, an
+      #      old SourceForge build), not GTK3. Silently wrong, not merely
+      #      out of date.
+      #   2. A same-filename search for libgobject-2.0-0.dll across
+      #      Program Files -- windows-latest images already carry a stale
+      #      GTK2-Runtime elsewhere, which matches the filename but not
+      #      the actual GObject/Pango ABI WeasyPrint needs.
+      # This step uses MSYS2 + pacman instead, WeasyPrint's own documented
+      # route for Windows (see
+      # https://doc.courtbouillon.org/weasyprint/stable/first_steps.html#windows)
+      # -- it installs the real mingw-w64 Pango/GObject/HarfBuzz/FontConfig
+      # build at a known, fixed path.
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: mingw-w64-x86_64-pango
 
-      - name: Locate GTK3 runtime DLLs and export GTK_RUNTIME_BIN
+      - name: Locate GTK3 (MSYS2/mingw64) runtime DLLs and export GTK_RUNTIME_BIN
         shell: pwsh
         run: |
-          # windows-latest images ship a STALE GTK2-Runtime under
-          # "Program Files (x86)" (pre-existing, unrelated to the
-          # gtk-runtime choco package just installed above) that also
-          # happens to contain a file named libgobject-2.0-0.dll -- an
-          # earlier version of this search picked that one up first
-          # (Select-Object -First 1 with no filtering) and bundled an
-          # incompatible GTK2 DLL, which still failed to load. Exclude any
-          # "GTK2" path explicitly, and require BOTH libgobject and
-          # libpango to be present in the same directory as a sanity check
-          # that it's a real, complete GTK3 runtime rather than a stray
-          # same-named file.
-          $candidates = Get-ChildItem -Path "C:\Program Files*","C:\ProgramData\chocolatey*" -Filter "libgobject-2.0-0.dll" -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { $_.DirectoryName -notmatch 'GTK2' } |
-            Where-Object { Test-Path (Join-Path $_.DirectoryName "libpango-1.0-0.dll") }
+          # Try the well-known install locations first (fast, no scanning).
+          $fixed = @(
+            "C:\msys64\mingw64\bin",
+            "D:\msys64\mingw64\bin",
+            "C:\tools\msys64\mingw64\bin",
+            "$env:RUNNER_TEMP\msys64\mingw64\bin"
+          )
+          $bin = $fixed | Where-Object { Test-Path (Join-Path $_ "libgobject-2.0-0.dll") } | Select-Object -First 1
 
-          if (-not $candidates) {
-            Write-Error "No usable GTK3 runtime directory found (with both libgobject-2.0-0.dll and libpango-1.0-0.dll, excluding any stale GTK2-Runtime) after installing gtk-runtime -- WeasyPrint/PDF export would be broken in the built .exe. Failing the build instead of shipping it silently broken (see packaging/BUILD.md)."
+          if (-not $bin) {
+            # Fall back to a bounded search (only under a "msys64" top
+            # directory, so this doesn't scan the whole drive) in case the
+            # action's default location ever changes. Still requires
+            # libpango alongside libgobject as a completeness check.
+            $candidates = Get-ChildItem -Path "C:\msys64*","D:\msys64*" -Filter "libgobject-2.0-0.dll" -Recurse -ErrorAction SilentlyContinue |
+              Where-Object { $_.DirectoryName -match 'mingw64' } |
+              Where-Object { Test-Path (Join-Path $_.DirectoryName "libpango-1.0-0.dll") }
+            if ($candidates) {
+              $bin = ($candidates | Select-Object -First 1).DirectoryName
+            }
+          }
+
+          if (-not $bin) {
+            Write-Error "No usable mingw64 Pango/GObject directory found after the MSYS2 pango install -- WeasyPrint/PDF export would be broken in the built .exe. Failing the build instead of shipping it silently broken (see packaging/BUILD.md)."
             exit 1
           }
-          # If multiple valid candidates exist, prefer one whose path
-          # actually says "GTK3".
-          $dll = $candidates | Sort-Object { if ($_.DirectoryName -match 'GTK3') { 0 } else { 1 } } | Select-Object -First 1
-          $bin = $dll.DirectoryName
-          Write-Host "Found GTK3 runtime bin directory: $bin"
-          Get-ChildItem $bin -Filter "*.dll" | ForEach-Object { Write-Host "  $($_.Name)" }
+          Write-Host "Found GTK3 (MSYS2 mingw64) runtime bin directory: $bin"
+          Get-ChildItem $bin -Filter "*.dll" | Select-Object -First 10 | ForEach-Object { Write-Host "  $($_.Name)" }
           echo "GTK_RUNTIME_BIN=$bin" >> $env:GITHUB_ENV
           # Also put it on PATH for the rest of this job, so the sanity-
-          # check step below actually exercises THIS SAME GTK3 install
-          # (the one that will be bundled), not whatever happens to be
-          # ambiently first on PATH already.
+          # check step below actually exercises THIS SAME install (the one
+          # that will be bundled), not whatever happens to be ambiently
+          # first on PATH already.
           echo "$bin" >> $env:GITHUB_PATH
 
       - name: Install dependencies
