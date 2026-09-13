@@ -19,6 +19,9 @@ Usage (from the repo root, on Windows):
 Result: dist/RepairReportApp.exe -- ONE file, nothing else needed next to
 it (it self-extracts to a temp dir on each launch and cleans up after).
 """
+import glob
+import os
+
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 datas = [
@@ -31,10 +34,33 @@ hiddenimports = []
 hiddenimports += collect_submodules("weasyprint")
 hiddenimports += ["PySide6.QtSvg"]  # matplotlib/Qt occasionally need this pulled in explicitly
 
+# WeasyPrint loads Pango/GObject/HarfBuzz/FontConfig via ctypes at RUNTIME
+# (ctypes.util.find_library), not a normal Python import -- PyInstaller's
+# static analysis can't see that dependency and won't bundle it on its
+# own. Without this, the built .exe fails on a clean machine with
+# "cannot load library 'libgobject-2.0-0'" even though it built and ran
+# fine on the machine that has GTK installed. Set GTK_RUNTIME_BIN to the
+# GTK3 runtime's bin/ directory (see packaging/BUILD.md) before running
+# PyInstaller to bundle its DLLs into the .exe itself, so an end user's
+# machine doesn't need GTK installed separately. The GitHub Actions
+# workflow (.github/workflows/build-windows-exe.yml) sets this
+# automatically; building by hand on Windows needs it set manually.
+binaries = []
+gtk_bin = os.environ.get("GTK_RUNTIME_BIN")
+if gtk_bin and os.path.isdir(gtk_bin):
+    binaries += [(dll, ".") for dll in glob.glob(os.path.join(gtk_bin, "*.dll"))]
+    print(f"[repair_report_onefile.spec] Bundling {len(binaries)} GTK runtime DLL(s) from {gtk_bin}")
+else:
+    print(
+        "[repair_report_onefile.spec] WARNING: GTK_RUNTIME_BIN not set/found -- "
+        "PDF export (WeasyPrint) in the built .exe will likely fail on a machine "
+        "without the GTK3 runtime installed separately. See packaging/BUILD.md."
+    )
+
 a = Analysis(
     ["../main.py"],
     pathex=[],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

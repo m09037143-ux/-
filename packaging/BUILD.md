@@ -34,16 +34,18 @@ the trade-off if you're unsure which to pick.
 - Python 3.11+ (64-bit), added to PATH.
 - Git (to clone the repo) -- or just copy the source tree over.
 - **WeasyPrint's native dependencies.** WeasyPrint (used for PDF export)
-  depends on Pango/Cairo/GDK-Pixbuf, which are not pure-Python and are the
-  single most common source of "it works on my dev machine, not on the
-  built .exe" pain for this stack. On Windows you need the GTK3 runtime
-  libraries on the PATH before building AND on the target machine. The
-  simplest option: install the standalone **"GTK3 runtime for Windows"**
-  installer (search for `gtk3-runtime` releases, e.g. the
-  tschoonj/GTK-for-Windows-Runtime-Environment-Installer project), then
-  confirm `python -c "import weasyprint"` works in a plain `cmd.exe` before
-  attempting to freeze it. If that import fails, the .exe will fail the
-  same way, just with a less obvious error.
+  depends on Pango/GObject/HarfBuzz/FontConfig, which are not pure-Python
+  and are the single most common source of "it works on my dev machine,
+  not on the built .exe" pain for this stack. On Windows you need the
+  GTK3 runtime libraries on the PATH before building AND (unless you do
+  the DLL-bundling step below) on the target machine too. The simplest
+  option: install the standalone **"GTK3 runtime for Windows"** installer
+  (search for `gtk3-runtime` releases, e.g. the
+  tschoonj/GTK-for-Windows-Runtime-Environment-Installer project, or
+  `choco install gtk-runtime`), then confirm `python -c "import weasyprint"`
+  works in a plain `cmd.exe` before attempting to freeze it. If that
+  import fails, the .exe will fail the same way, just with a less obvious
+  error.
   - If bundling GTK turns out to be impractical for the actual release
     machine, the fallback documented in the product spec is acceptable:
     generate DOCX via python-docx (already implemented, no native deps) and
@@ -51,6 +53,32 @@ the trade-off if you're unsure which to pick.
     is guaranteed to be present -- but that reintroduces an external
     dependency the spec explicitly wanted to avoid. Try the WeasyPrint path
     first.
+- **Bundle the GTK DLLs into the .exe itself** (recommended -- otherwise
+  every end user also needs the GTK3 runtime installed separately, and
+  will hit exactly the error below if they don't). WeasyPrint loads these
+  libraries via `ctypes.util.find_library()` at runtime, not a normal
+  Python import, so PyInstaller's static analysis can't see them and
+  won't bundle them unless told to. Both `.spec` files read a
+  `GTK_RUNTIME_BIN` environment variable and bundle every `.dll` in it if
+  set. Before running `pyinstaller`, set it to your GTK3 runtime's `bin`
+  directory, e.g. (PowerShell):
+  ```powershell
+  $env:GTK_RUNTIME_BIN = "C:\Program Files\GTK3-Runtime Win64\bin"
+  ```
+  (adjust the path to wherever your installer put it -- search for
+  `libgobject-2.0-0.dll` if unsure). The GitHub Actions workflow does
+  this automatically (it locates the DLLs after `choco install
+  gtk-runtime` and exports the variable itself) -- this step is only
+  needed when building by hand.
+  - **If you see `Ошибка при формировании отчёта: cannot load library
+    'libgobject-2.0-0': error 0x7e ... ctypes.util.find_library() did not
+    manage to locate a library called 'libgobject-2.0-0'`** when running
+    a built `.exe`: this is exactly the above -- the .exe was built
+    without `GTK_RUNTIME_BIN` set (so the GTK DLLs weren't bundled) and
+    the machine running it doesn't have the GTK3 runtime installed
+    either. Either install the GTK3 runtime on that machine (quick
+    workaround) or rebuild with `GTK_RUNTIME_BIN` set (proper fix, so
+    future end users don't need to install anything).
 
 ```
 pip install -r requirements.txt
@@ -118,8 +146,8 @@ someone runs §4 on a real Windows box.
 
 Before shipping, run `dist/RepairReportApp.exe` (onefile) or
 `dist/RepairReportApp/RepairReportApp.exe` (onedir) on a Windows 10/11
-machine that has **no** Python, Office, or LibreOffice installed, and
-confirm:
+machine that has **no** Python, Office, LibreOffice, or GTK3 runtime
+installed, and confirm:
 
 1. The app launches (window opens, no console flashes).
 2. Loading `samples/WR_Consolidated_List_20260902_весь.xlsx` (or the

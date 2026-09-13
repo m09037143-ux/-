@@ -27,20 +27,38 @@ jobs:
           python-version: "3.11"
           architecture: "x64"
 
-      # WeasyPrint (PDF export) needs Pango/HarfBuzz/FontConfig native
-      # libraries on Windows -- see packaging/BUILD.md's GTK3-runtime
-      # caveat. Installing it here too so the build step itself can import
-      # weasyprint cleanly (PyInstaller's Analysis phase does import
-      # discovered hook modules).
+      # WeasyPrint (PDF export) needs Pango/GObject/HarfBuzz/FontConfig
+      # native DLLs on Windows -- see packaging/BUILD.md's GTK3-runtime
+      # caveat. These are loaded via ctypes.util.find_library() at RUNTIME,
+      # not a normal Python import, so PyInstaller's static analysis can't
+      # see them and won't bundle them on its own (this is exactly what
+      # produced "cannot load library 'libgobject-2.0-0'" on a clean
+      # Windows machine the first time this was built). Installing GTK
+      # here lets the build machine import weasyprint at all; the next
+      # step finds the resulting DLLs so the .spec can bundle them INTO
+      # the .exe, so an end user's machine doesn't need GTK installed too.
       - name: Install WeasyPrint native dependencies (GTK3 runtime)
+        run: choco install gtk-runtime -y --no-progress
+
+      - name: Locate GTK3 runtime DLLs and export GTK_RUNTIME_BIN
+        shell: pwsh
         run: |
-          choco install gtk-runtime -y --no-progress
-        continue-on-error: true # best-effort; see BUILD.md if PDF export needs revisiting
+          $dll = Get-ChildItem -Path "C:\Program Files*","C:\ProgramData\chocolatey*" -Filter "libgobject-2.0-0.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $dll) {
+            Write-Error "libgobject-2.0-0.dll not found anywhere under Program Files/chocolatey after installing gtk-runtime -- WeasyPrint/PDF export would be broken in the built .exe. Failing the build instead of shipping it silently broken (see packaging/BUILD.md)."
+            exit 1
+          }
+          $bin = $dll.DirectoryName
+          Write-Host "Found GTK3 runtime bin directory: $bin"
+          echo "GTK_RUNTIME_BIN=$bin" >> $env:GITHUB_ENV
 
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
           pip install pyinstaller
+
+      - name: Sanity-check weasyprint imports on this runner
+        run: python -c "import weasyprint; print('weasyprint OK:', weasyprint.__version__)"
 
       - name: Build single-file .exe
         run: |

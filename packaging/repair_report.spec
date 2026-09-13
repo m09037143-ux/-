@@ -12,6 +12,9 @@ Usage (from the repo root, on Windows):
 Result: dist/RepairReportApp/RepairReportApp.exe (onedir build -- see
 BUILD.md for why this project uses onedir rather than onefile).
 """
+import glob
+import os
+
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 datas = [
@@ -24,10 +27,27 @@ hiddenimports = []
 hiddenimports += collect_submodules("weasyprint")
 hiddenimports += ["PySide6.QtSvg"]  # matplotlib/Qt occasionally need this pulled in explicitly
 
+# WeasyPrint loads Pango/GObject/HarfBuzz/FontConfig via ctypes at RUNTIME
+# (ctypes.util.find_library), not a normal Python import -- PyInstaller
+# can't see that dependency on its own. See the identical, longer comment
+# in repair_report_onefile.spec; same fix here (set GTK_RUNTIME_BIN before
+# running PyInstaller -- packaging/BUILD.md).
+binaries = []
+gtk_bin = os.environ.get("GTK_RUNTIME_BIN")
+if gtk_bin and os.path.isdir(gtk_bin):
+    binaries += [(dll, ".") for dll in glob.glob(os.path.join(gtk_bin, "*.dll"))]
+    print(f"[repair_report.spec] Bundling {len(binaries)} GTK runtime DLL(s) from {gtk_bin}")
+else:
+    print(
+        "[repair_report.spec] WARNING: GTK_RUNTIME_BIN not set/found -- "
+        "PDF export (WeasyPrint) will likely fail on a machine without the "
+        "GTK3 runtime installed separately. See packaging/BUILD.md."
+    )
+
 a = Analysis(
     ["../main.py"],
     pathex=[],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
