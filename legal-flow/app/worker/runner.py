@@ -19,7 +19,12 @@ async def run_forever() -> None:
     logger.info("Правовой Поток worker запущен, ожидание задач в очереди Redis")
     session_factory = get_session_factory()
     while True:
-        job_id_str = await dequeue_scan_job(timeout_seconds=5)
+        try:
+            job_id_str = await dequeue_scan_job(timeout_seconds=5)
+        except Exception:  # noqa: BLE001 -- a transient Redis hiccup must not kill the worker
+            logger.exception("Ошибка при опросе очереди, повтор через 2с")
+            await asyncio.sleep(2)
+            continue
         if job_id_str is None:
             continue
         try:
