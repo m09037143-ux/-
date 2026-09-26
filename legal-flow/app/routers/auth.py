@@ -14,6 +14,7 @@ from app.schemas.auth import (
     MembershipOut,
     RegisterRequest,
     ResetPasswordRequest,
+    UpdateMeRequest,
 )
 from app.services import auth_service
 from app.services.rate_limit import enforce_rate_limit
@@ -86,6 +87,15 @@ async def reset_password(payload: ResetPasswordRequest, request: Request, db: As
 
 @router.get("/me", response_model=MeResponse)
 async def me(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return await _me_response(db, user)
+
+
+@router.patch("/me", response_model=MeResponse, dependencies=[Depends(require_csrf)])
+async def update_me(
+    payload: UpdateMeRequest, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    user.name = payload.name
+    await db.commit()
     return await _me_response(db, user)
 
 

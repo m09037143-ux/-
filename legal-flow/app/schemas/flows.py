@@ -41,6 +41,11 @@ class AddSourceRequest(BaseModel):
     domain: str
 
 
+class UpdateSourceRequest(BaseModel):
+    domain: str | None = None
+    active: bool | None = None
+
+
 class ScanJobOut(BaseModel):
     id: uuid.UUID
     flow_id: uuid.UUID

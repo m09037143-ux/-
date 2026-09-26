@@ -16,6 +16,7 @@ from app.schemas.flows import (
     ScanJobOut,
     SourceSiteOut,
     UpdateFlowRequest,
+    UpdateSourceRequest,
 )
 from app.services import flow_service
 from app.services.rate_limit import enforce_rate_limit
@@ -105,6 +106,27 @@ async def add_source(
 ):
     flow = await _get_owned_flow(db, membership, flow_id)
     site = await flow_service.add_source(db, flow=flow, workspace_id=membership.workspace_id, domain=payload.domain)
+    return SourceSiteOut(id=site.id, domain=site.domain, active=site.active)
+
+
+@router.patch("/flows/{flow_id}/sources/{source_id}", response_model=SourceSiteOut, dependencies=[Depends(require_csrf)])
+async def update_source(
+    flow_id: uuid.UUID,
+    source_id: uuid.UUID,
+    payload: UpdateSourceRequest,
+    membership: Membership = Depends(require_role(*_EDIT_ROLES)),
+    _access: Membership = Depends(require_active_access),
+    db: AsyncSession = Depends(get_db),
+):
+    flow = await _get_owned_flow(db, membership, flow_id)
+    site = await db.get(SourceSite, source_id)
+    if site is None or site.flow_id != flow.id:
+        raise AppError("VALIDATION_ERROR", "Источник не найден.")
+    if payload.domain is not None:
+        site.domain = flow_service.validate_domain(payload.domain)
+    if payload.active is not None:
+        site.active = payload.active
+    await db.commit()
     return SourceSiteOut(id=site.id, domain=site.domain, active=site.active)
 
 
