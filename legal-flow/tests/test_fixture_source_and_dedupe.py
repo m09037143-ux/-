@@ -105,6 +105,11 @@ async def test_repeated_runs_dedupe_same_story(authed):
     news_list = (await authed.get("/api/v1/news")).json()
     assert len(news_list) == 2
 
+    # The API surfaces *why* the second run found nothing new, so the frontend
+    # can tell "nothing found" apart from "found, but already collected".
+    job2_api = (await authed.get(f"/api/v1/scan-jobs/{job2.id}")).json()
+    assert job2_api["duplicate_count"] == 2
+
 
 async def test_domain_without_source_policy_is_blocked_not_collected(authed):
     await _register_and_get_csrf(authed, "scan-policy")

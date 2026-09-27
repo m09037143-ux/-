@@ -573,7 +573,13 @@
           if (job.status === 'done' || job.status === 'failed') break;
           await sleep(700);
         }
-        if (job.status === 'done') { toast('Сбор завершён: добавлено материалов — ' + job.created_news_ids.length); await loadNews(); render(); }
+        if (job.status === 'done') {
+          var msg = 'Сбор завершён: добавлено материалов — ' + job.created_news_ids.length;
+          if (job.created_news_ids.length === 0 && job.duplicate_count > 0) {
+            msg = 'Сбор завершён: новых материалов нет — все ' + job.duplicate_count + ' найденных уже собраны ранее (см. «Новости»).';
+          }
+          toast(msg); await loadNews(); render();
+        }
         else if (job.status === 'failed') toast('Задание завершилось с ошибкой: ' + (job.error || ''), true);
       } catch (e) { toast(e.message, true); }
     });

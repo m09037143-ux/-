@@ -1,13 +1,13 @@
 import uuid
 
 from fastapi import APIRouter, Depends, Header
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.deps import get_current_membership, require_active_access, require_csrf, require_role
 from app.errors import AppError
-from app.models import Membership, NewsFlow, ScanJob, SourceSite
+from app.models import Discovery, Membership, NewsFlow, ScanJob, SourceSite
 from app.models.enums import Role, ScanJobStatus
 from app.schemas.flows import (
     AddSourceRequest,
@@ -26,6 +26,14 @@ from app.worker.queue import enqueue_scan_job
 router = APIRouter(prefix="/api/v1", tags=["flows"])
 
 _EDIT_ROLES = (Role.workspace_owner, Role.editor)
+
+
+async def _duplicate_count(db: AsyncSession, job_id: uuid.UUID) -> int:
+    return await db.scalar(
+        select(func.count()).select_from(Discovery).where(
+            Discovery.scan_job_id == job_id, Discovery.is_duplicate.is_(True)
+        )
+    )
 
 
 async def _get_owned_flow(db: AsyncSession, membership: Membership, flow_id: uuid.UUID) -> NewsFlow:
@@ -178,6 +186,7 @@ async def create_scan_job(
         status=job.status.value,
         provider_name=job.provider_name,
         created_news_ids=job.created_news_ids,
+        duplicate_count=await _duplicate_count(db, job.id),
         error=job.error,
         created_at=job.created_at,
         finished_at=job.finished_at,
@@ -202,6 +211,7 @@ async def get_scan_job(
         status=job.status.value,
         provider_name=job.provider_name,
         created_news_ids=job.created_news_ids,
+        duplicate_count=await _duplicate_count(db, job.id),
         error=job.error,
         created_at=job.created_at,
         finished_at=job.finished_at,

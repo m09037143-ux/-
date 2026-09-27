@@ -52,6 +52,7 @@ class ScanJobOut(BaseModel):
     status: str
     provider_name: str
     created_news_ids: list[str]
+    duplicate_count: int
     error: str | None
     created_at: datetime
     finished_at: datetime | None
