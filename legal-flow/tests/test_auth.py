@@ -39,6 +39,29 @@ async def test_register_rejects_duplicate_email(authed):
     assert r2.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
+async def test_register_short_password_returns_readable_app_error(authed):
+    resp = await authed.post(
+        "/api/v1/auth/register",
+        json={"name": "Иван Иванов", "email": unique_email(), "password": "short1"},
+    )
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["error"]["code"] == "VALIDATION_ERROR"
+    assert "Пароль" in body["error"]["message"]
+    assert "detail" not in body
+
+
+async def test_register_invalid_email_returns_readable_app_error(authed):
+    resp = await authed.post(
+        "/api/v1/auth/register",
+        json={"name": "Иван Иванов", "email": "not-an-email", "password": "correct-horse-battery"},
+    )
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["error"]["code"] == "VALIDATION_ERROR"
+    assert "Email" in body["error"]["message"]
+
+
 async def test_login_wrong_password_rejected_and_hash_is_argon2(authed):
     from sqlalchemy import select
     from app.db import get_session_factory

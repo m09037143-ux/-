@@ -1,4 +1,5 @@
 from fastapi import Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 # Коды ошибок зафиксированы ТЗ §12. Не переименовывать без обновления ТЗ и клиента.
@@ -42,4 +43,42 @@ async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
     return JSONResponse(
         status_code=exc.status_code,
         content={"error": {"code": exc.code, "message": exc.message, "details": exc.details}},
+    )
+
+
+_FIELD_LABELS = {
+    "name": "Имя",
+    "email": "Email",
+    "password": "Пароль",
+}
+
+_TYPE_MESSAGES = {
+    "string_too_short": "слишком короткое значение (минимум {min_length} символов)",
+    "string_too_long": "слишком длинное значение (максимум {max_length} символов)",
+    "missing": "обязательное поле",
+    "string_type": "ожидалась строка",
+    "value_error": "некорректное значение",
+}
+
+
+async def request_validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    first = exc.errors()[0] if exc.errors() else {}
+    loc = [str(part) for part in first.get("loc", []) if part != "body"]
+    field = loc[-1] if loc else None
+    label = _FIELD_LABELS.get(field, field or "запрос")
+    error_type = first.get("type", "")
+    ctx = first.get("ctx") or {}
+    if "valid email address" in first.get("msg", ""):
+        detail = "некорректный email"
+    elif error_type in _TYPE_MESSAGES:
+        try:
+            detail = _TYPE_MESSAGES[error_type].format(**ctx)
+        except KeyError:
+            detail = _TYPE_MESSAGES[error_type]
+    else:
+        detail = first.get("msg", "некорректное значение")
+    message = f"{label}: {detail}"
+    return JSONResponse(
+        status_code=422,
+        content={"error": {"code": "VALIDATION_ERROR", "message": message, "details": {"errors": exc.errors()}}},
     )

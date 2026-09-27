@@ -1,10 +1,11 @@
 import logging
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.errors import AppError, app_error_handler
+from app.errors import AppError, app_error_handler, request_validation_error_handler
 from app.routers import access, activity, admin, ai, auth, billing, exports, flows, news
 
 
@@ -23,6 +24,7 @@ def create_app() -> FastAPI:
     )
 
     app.add_exception_handler(AppError, app_error_handler)
+    app.add_exception_handler(RequestValidationError, request_validation_error_handler)
 
     app.include_router(auth.router)
     app.include_router(access.router)
