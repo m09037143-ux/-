@@ -54,6 +54,16 @@ def _input_hash(payload: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _strip_markdown_json_fence(text: str) -> str:
+    """Models asked for raw JSON sometimes still wrap it in a ```json ... ``` fence
+    regardless of instructions — strip that before validation instead of failing."""
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = stripped.removeprefix("```json").removeprefix("```").strip()
+        stripped = stripped.removesuffix("```").strip()
+    return stripped
+
+
 class YandexGPTPro51Provider:
     """Единственный провайдер ИИ в MVP (ТЗ §10). Каждый вызов — новая HTTP-сессия,
     все параметры модели берутся из настроек сервера, ключ никогда не логируется."""
@@ -138,7 +148,7 @@ class YandexGPTPro51Provider:
             else:
                 model_uri_logged = self.settings.yandex_model_uri
                 raw_text = await self._call_real_model(prompt=prompt, stage=stage)
-            parsed = result_model.model_validate_json(raw_text)
+            parsed = result_model.model_validate_json(_strip_markdown_json_fence(raw_text))
         except (ValidationError, json.JSONDecodeError, KeyError) as exc:
             error = f"invalid_json_or_schema: {exc}"
             parsed = None
@@ -174,7 +184,12 @@ class YandexGPTPro51Provider:
         return parsed
 
     async def check_relevance(self, db, *, workspace_id: uuid.UUID, news_item_id: uuid.UUID, title: str, theme: str) -> RelevanceResult:
-        prompt = f"[{PROMPT_VERSION}:relevance] Тема потока: {theme}\nЗаголовок: {title}"
+        prompt = (
+            f"[{PROMPT_VERSION}:relevance] Тема потока: {theme}\nЗаголовок: {title}\n\n"
+            "Определи, относится ли заголовок к теме потока. "
+            'Ответь СТРОГО одним JSON-объектом без markdown и пояснений вне JSON, '
+            'по схеме: {"is_relevant": true|false, "reasoning": "краткое обоснование на русском"}.'
+        )
         fixture = {"is_relevant": True, "reasoning": "DEMO_FIXTURE: заголовок соответствует теме потока."}
         return await self._run_stage(
             db, workspace_id=workspace_id, news_item_id=news_item_id, stage="relevance",
@@ -182,7 +197,14 @@ class YandexGPTPro51Provider:
         )
 
     async def build_fact_passport(self, db, *, workspace_id: uuid.UUID, news_item_id: uuid.UUID, source_fragment: str) -> FactPassportResult:
-        prompt = f"[{PROMPT_VERSION}:facts] Извлеки факты из фрагмента, не придумывая дат/номеров дел:\n{source_fragment}"
+        prompt = (
+            f"[{PROMPT_VERSION}:facts] Извлеки юридически значимые факты из фрагмента, "
+            f"не придумывая дат/номеров дел:\n{source_fragment}\n\n"
+            'Ответь СТРОГО одним JSON-объектом без markdown и пояснений вне JSON, по схеме: '
+            '{"statements": [{"statement": "формулировка факта", '
+            '"status": "confirmed|unknown|needs_review|contradictory", '
+            '"source_fragment": "цитата из фрагмента, подтверждающая факт"}]}.'
+        )
         fixture = {
             "statements": [
                 {
@@ -198,7 +220,12 @@ class YandexGPTPro51Provider:
         )
 
     async def draft_independent_text(self, db, *, workspace_id: uuid.UUID, news_item_id: uuid.UUID, title: str, facts_text: str) -> DraftResult:
-        prompt = f"[{PROMPT_VERSION}:draft] Напиши самостоятельный текст по фактам (не копируя источник):\nЗаголовок: {title}\nФакты: {facts_text}"
+        prompt = (
+            f"[{PROMPT_VERSION}:draft] Напиши самостоятельный журналистский текст по фактам "
+            f"(не копируя источник):\nЗаголовок: {title}\nФакты: {facts_text}\n\n"
+            'Ответь СТРОГО одним JSON-объектом без markdown и пояснений вне JSON, по схеме: '
+            '{"title": "заголовок материала", "text": "текст материала"}.'
+        )
         fixture = {
             "title": title,
             "text": (
@@ -212,7 +239,13 @@ class YandexGPTPro51Provider:
         )
 
     async def critique(self, db, *, workspace_id: uuid.UUID, news_item_id: uuid.UUID, text: str, facts_text: str) -> CritiqueResult:
-        prompt = f"[{PROMPT_VERSION}:critique] Найди неподтверждённые утверждения и текстовые совпадения:\nТекст: {text}\nФакты: {facts_text}"
+        prompt = (
+            f"[{PROMPT_VERSION}:critique] Найди неподтверждённые утверждения, искажения фактов и "
+            f"текстовые совпадения с источником:\nТекст: {text}\nФакты: {facts_text}\n\n"
+            'Ответь СТРОГО одним JSON-объектом без markdown и пояснений вне JSON, по схеме: '
+            '{"unconfirmed_claims": ["..."], "distortions": ["..."], "similarity_concerns": ["..."]}. '
+            "Пустые списки — если проблем не найдено."
+        )
         fixture = {"unconfirmed_claims": [], "distortions": [], "similarity_concerns": []}
         result = await self._run_stage(
             db, workspace_id=workspace_id, news_item_id=news_item_id, stage="critique",
