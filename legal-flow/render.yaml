@@ -13,6 +13,7 @@ services:
   - type: web
     name: pravovoy-potok-api
     env: docker
+    rootDir: legal-flow
     dockerfilePath: ./Dockerfile
     dockerCommand: >-
       sh -c "alembic upgrade head && uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000"
@@ -53,6 +54,7 @@ services:
   - type: worker
     name: pravovoy-potok-worker
     env: docker
+    rootDir: legal-flow
     dockerfilePath: ./Dockerfile
     dockerCommand: python -m app.worker.runner
     plan: starter
@@ -79,5 +81,6 @@ services:
   - type: web
     name: pravovoy-potok-frontend
     env: static
+    rootDir: legal-flow
     buildCommand: ""
     staticPublishPath: ./frontend
