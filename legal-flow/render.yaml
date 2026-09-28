@@ -1,0 +1,83 @@
+# Render.com Blueprint — разворачивает backend API, фоновый worker,
+# PostgreSQL и Redis. Подробная пошаговая инструкция — docs/DEPLOY_RENDER.md
+# (там же — почему часть переменных окружения помечена sync: false и
+# заполняется вручную в панели Render, а не автоматически).
+
+databases:
+  - name: pravovoy-potok-db
+    databaseName: pravovoy_potok
+    user: pravovoy_potok
+    plan: free
+
+services:
+  - type: web
+    name: pravovoy-potok-api
+    env: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: >-
+      sh -c "alembic upgrade head && uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000"
+    plan: starter
+    healthCheckPath: /health/live
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: CSRF_SECRET
+        generateValue: true
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: COOKIE_DOMAIN
+        value: ""
+      - key: COOKIE_SAMESITE
+        value: none
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: LLM_PROVIDER
+        value: yandexgpt_pro_5_1
+      - key: YANDEX_FOLDER_ID
+        sync: false
+      - key: YANDEX_MODEL_URI
+        sync: false
+      - key: YANDEX_API_KEY
+        sync: false
+      - key: LLM_FIXTURE_MODE
+        value: "false"
+      - key: PAYMENT_PROVIDER
+        value: not_configured
+      - key: LOG_LEVEL
+        value: INFO
+
+  - type: worker
+    name: pravovoy-potok-worker
+    env: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: python -m app.worker.runner
+    plan: starter
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: LLM_PROVIDER
+        value: yandexgpt_pro_5_1
+      - key: YANDEX_FOLDER_ID
+        sync: false
+      - key: YANDEX_MODEL_URI
+        sync: false
+      - key: YANDEX_API_KEY
+        sync: false
+      - key: LLM_FIXTURE_MODE
+        value: "false"
+      - key: LOG_LEVEL
+        value: INFO
+
+  - type: web
+    name: pravovoy-potok-frontend
+    env: static
+    buildCommand: ""
+    staticPublishPath: ./frontend

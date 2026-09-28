@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     csrf_secret: str = "dev-only-change-me"
     cookie_secure: bool = True
     cookie_domain: str | None = None
+    # "lax" по умолчанию (доп. защита от CSRF на уровне куки, работает при общем домене
+    # или обратном прокси на /api/*); "none" нужен, если frontend и API — разные домены
+    # (например, два разных поддомена *.onrender.com) — тогда обязателен cookie_secure=true.
+    cookie_samesite: str = "lax"
     session_ttl_hours: int = 24 * 14
 
     frontend_origin: str = "http://localhost:5173"
