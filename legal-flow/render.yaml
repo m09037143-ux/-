@@ -1,11 +1,15 @@
 # Render.com Blueprint — разворачивает backend API (он же отдаёт frontend,
 # см. app/main.py — вся статика идёт из того же процесса, одним доменом)
-# и PostgreSQL. Фоновый worker (app/worker/runner.py) сюда НЕ включён — у
-# Render нет бесплатного тарифа для Background Worker, поэтому по решению
-# владельца worker продолжает работать локально, подключаясь к этой же
-# базе/Redis по внешним (External) адресам. Подробная пошаговая
-# инструкция — docs/DEPLOY_RENDER.md (там же — почему часть переменных
-# окружения помечена sync: false и заполняется вручную в панели Render).
+# и PostgreSQL. Redis (переменная REDIS_URL) сюда тоже не включён — заводится
+# отдельно (New → Key Value) и используется ТОЛЬКО этим API-процессом, для
+# rate limit, по внутреннему (Internal) адресу. Фоновый worker
+# (app/worker/runner.py) сюда НЕ включён — у Render нет бесплатного тарифа
+# для Background Worker, поэтому по решению владельца worker продолжает
+# работать локально, подключаясь к этой же базе по внешнему (External)
+# адресу — Redis worker'у не нужен вообще, он опрашивает таблицу scan_jobs
+# напрямую. Подробная пошаговая инструкция — docs/DEPLOY_RENDER.md (там же —
+# почему часть переменных окружения помечена sync: false и заполняется
+# вручную в панели Render).
 
 databases:
   - name: pravovoy-potok-db

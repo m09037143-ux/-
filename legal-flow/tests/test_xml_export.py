@@ -1,12 +1,8 @@
-import uuid
 import xml.etree.ElementTree as ET
 
 import pytest
 
-from app.db import get_session_factory
-from app.services.scan_service import process_scan_job
-from app.worker.queue import dequeue_scan_job
-from tests.conftest import unique_email
+from tests.conftest import run_next_pending_job, unique_email
 
 pytestmark = pytest.mark.asyncio
 
@@ -19,10 +15,7 @@ async def _publish_one_news_item(authed, *, release_mode: str = "INDEPENDENT_FAC
     )
     flow_id = flow.json()["id"]
     await authed.post(f"/api/v1/flows/{flow_id}/scan-jobs", headers={"Idempotency-Key": "seed"})
-    job_id_str = await dequeue_scan_job(timeout_seconds=1)
-    factory = get_session_factory()
-    async with factory() as db:
-        await process_scan_job(db, uuid.UUID(job_id_str))
+    await run_next_pending_job()
     news_id = (await authed.get("/api/v1/news")).json()[0]["id"]
 
     await authed.patch(f"/api/v1/news/{news_id}/draft", json={"expected_version": 1, "title": "Заголовок", "text": "Текст материала."})

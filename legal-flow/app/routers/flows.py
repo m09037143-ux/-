@@ -21,7 +21,6 @@ from app.schemas.flows import (
 from app.services import flow_service
 from app.services.rate_limit import enforce_rate_limit
 from app.config import get_settings
-from app.worker.queue import enqueue_scan_job
 
 router = APIRouter(prefix="/api/v1", tags=["flows"])
 
@@ -178,7 +177,6 @@ async def create_scan_job(
         db.add(job)
         await db.commit()
         await db.refresh(job)
-        await enqueue_scan_job(str(job.id))
 
     return ScanJobOut(
         id=job.id,

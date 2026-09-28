@@ -124,3 +124,18 @@ def unique_email(prefix: str = "user") -> str:
     # email-validator treats .test as a reserved TLD; .com passes syntax validation
     # without doing a real deliverability/DNS check (check_deliverability defaults off).
     return f"{prefix}-{uuid.uuid4().hex[:10]}@example.com"
+
+
+async def run_next_pending_job():
+    """Runs the exact function the real worker process (app/worker/runner.py) calls:
+    finds the oldest pending scan_job by polling the table directly (no separate
+    queue) and processes it. This is the integration seam tests exercise."""
+    from app.db import get_session_factory
+    from app.services.scan_service import process_scan_job
+    from app.worker.runner import fetch_next_pending_job_id
+
+    factory = get_session_factory()
+    async with factory() as db:
+        job_id = await fetch_next_pending_job_id(db)
+        assert job_id is not None, "expected a scan job to be pending"
+        return await process_scan_job(db, job_id)

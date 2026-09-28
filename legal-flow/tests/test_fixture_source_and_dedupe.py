@@ -1,11 +1,6 @@
-import uuid
-
 import pytest
 
-from app.db import get_session_factory
-from app.services.scan_service import process_scan_job
-from app.worker.queue import dequeue_scan_job
-from tests.conftest import unique_email
+from tests.conftest import run_next_pending_job, unique_email
 
 pytestmark = pytest.mark.asyncio
 
@@ -13,17 +8,6 @@ pytestmark = pytest.mark.asyncio
 async def _register_and_get_csrf(authed, email_prefix: str):
     email = unique_email(email_prefix)
     await authed.post("/api/v1/auth/register", json={"name": "N", "email": email, "password": "correct-horse-battery"})
-
-
-async def _run_next_queued_job():
-    """Pops one job id the API enqueued and runs it through the exact function the
-    real worker process (app/worker/runner.py) calls — see ТЗ §4 on the separate
-    worker component. This is the integration seam tests exercise directly."""
-    job_id_str = await dequeue_scan_job(timeout_seconds=1)
-    assert job_id_str is not None, "expected a job to have been enqueued"
-    factory = get_session_factory()
-    async with factory() as db:
-        return await process_scan_job(db, uuid.UUID(job_id_str))
 
 
 async def test_scan_job_creates_fixture_news_labeled_demo(authed):
@@ -44,7 +28,7 @@ async def test_scan_job_creates_fixture_news_labeled_demo(authed):
     assert job_resp.status_code == 202
     assert job_resp.json()["status"] == "pending"
 
-    job = await _run_next_queued_job()
+    job = await run_next_pending_job()
     assert job.status.value == "done"
     # Fixture set has 3 canned headlines total (2 on garant.ru, 1 on pravo.ru); with
     # both domains allowed and limit=3, all 3 match.
@@ -68,16 +52,19 @@ async def test_scan_job_idempotency_key_does_not_duplicate(authed):
 
     r1 = await authed.post(f"/api/v1/flows/{flow_id}/scan-jobs", headers={"Idempotency-Key": "same-key"})
     job_id_1 = r1.json()["id"]
-    await _run_next_queued_job()
+    await run_next_pending_job()
 
-    # Same idempotency key again: must return the SAME job, no new queue entry, no new items.
+    # Same idempotency key again: must return the SAME job (now already "done"),
+    # not create a new pending row, and not create new items.
     r2 = await authed.post(f"/api/v1/flows/{flow_id}/scan-jobs", headers={"Idempotency-Key": "same-key"})
     assert r2.json()["id"] == job_id_1
 
-    from app.worker.queue import dequeue_scan_job
+    from app.db import get_session_factory
+    from app.worker.runner import fetch_next_pending_job_id
 
-    nothing = await dequeue_scan_job(timeout_seconds=1)
-    assert nothing is None
+    factory = get_session_factory()
+    async with factory() as db:
+        assert await fetch_next_pending_job_id(db) is None
 
     news_list = (await authed.get("/api/v1/news")).json()
     # Fixture set has 2 garant.ru-only headlines out of 3 total.
@@ -93,13 +80,13 @@ async def test_repeated_runs_dedupe_same_story(authed):
     flow_id = flow.json()["id"]
 
     await authed.post(f"/api/v1/flows/{flow_id}/scan-jobs", headers={"Idempotency-Key": "run-1"})
-    job1 = await _run_next_queued_job()
+    job1 = await run_next_pending_job()
     assert len(job1.created_news_ids) == 2
 
     # A second, distinct job (different idempotency key) rediscovering the SAME
     # fixture story must not create a second NewsItem (ТЗ §9 antidup by story_key).
     await authed.post(f"/api/v1/flows/{flow_id}/scan-jobs", headers={"Idempotency-Key": "run-2"})
-    job2 = await _run_next_queued_job()
+    job2 = await run_next_pending_job()
     assert len(job2.created_news_ids) == 0
 
     news_list = (await authed.get("/api/v1/news")).json()
@@ -120,7 +107,7 @@ async def test_domain_without_source_policy_is_blocked_not_collected(authed):
     flow_id = flow.json()["id"]
 
     await authed.post(f"/api/v1/flows/{flow_id}/scan-jobs", headers={"Idempotency-Key": "policy-1"})
-    job = await _run_next_queued_job()
+    job = await run_next_pending_job()
     assert job.status.value == "done"
     assert job.created_news_ids == []
 

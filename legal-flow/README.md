@@ -117,7 +117,7 @@ app/
   routers/      FastAPI-роутеры (auth, access, billing, flows, news, ai, exports, admin, activity)
   services/     Доменная логика (auth, trial, billing, flow, scan, news, export, ai, activity, rate_limit)
   providers/    SourceProvider (fixture/HTTP+SSRF), YandexGPTPro51Provider
-  worker/       Отдельный процесс фоновых задач + Redis-очередь
+  worker/       Отдельный процесс фоновых задач (опрашивает scan_jobs в Postgres)
 migrations/     Alembic (схема + сиды тарифов/source_policies)
 tests/          pytest, покрывает регистрацию/trial/изоляцию/антидубли/SSRF/
                 редакционный workflow/LLM-гейтинг/XML/платежи-заглушки/rate limit/admin
