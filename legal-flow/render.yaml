@@ -1,7 +1,10 @@
-# Render.com Blueprint — разворачивает backend API, фоновый worker,
-# PostgreSQL и Redis. Подробная пошаговая инструкция — docs/DEPLOY_RENDER.md
-# (там же — почему часть переменных окружения помечена sync: false и
-# заполняется вручную в панели Render, а не автоматически).
+# Render.com Blueprint — разворачивает backend API, PostgreSQL и статику
+# фронтенда. Фоновый worker (app/worker/runner.py) сюда НЕ включён — у
+# Render нет бесплатного тарифа для Background Worker, поэтому по
+# решению владельца worker продолжает работать локально, подключаясь к
+# этой же базе/Redis по внешним (External) адресам. Подробная пошаговая
+# инструкция — docs/DEPLOY_RENDER.md (там же — почему часть переменных
+# окружения помечена sync: false и заполняется вручную в панели Render).
 
 databases:
   - name: pravovoy-potok-db
@@ -48,33 +51,6 @@ services:
         value: "false"
       - key: PAYMENT_PROVIDER
         value: not_configured
-      - key: LOG_LEVEL
-        value: INFO
-
-  - type: worker
-    name: pravovoy-potok-worker
-    env: docker
-    rootDir: legal-flow
-    dockerfilePath: ./Dockerfile
-    dockerCommand: python -m app.worker.runner
-    plan: free
-    envVars:
-      - key: ENVIRONMENT
-        value: production
-      - key: DATABASE_URL
-        sync: false
-      - key: REDIS_URL
-        sync: false
-      - key: LLM_PROVIDER
-        value: yandexgpt_pro_5_1
-      - key: YANDEX_FOLDER_ID
-        sync: false
-      - key: YANDEX_MODEL_URI
-        sync: false
-      - key: YANDEX_API_KEY
-        sync: false
-      - key: LLM_FIXTURE_MODE
-        value: "false"
       - key: LOG_LEVEL
         value: INFO
 
