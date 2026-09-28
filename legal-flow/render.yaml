@@ -1,8 +1,9 @@
-# Render.com Blueprint — разворачивает backend API, PostgreSQL и статику
-# фронтенда. Фоновый worker (app/worker/runner.py) сюда НЕ включён — у
-# Render нет бесплатного тарифа для Background Worker, поэтому по
-# решению владельца worker продолжает работать локально, подключаясь к
-# этой же базе/Redis по внешним (External) адресам. Подробная пошаговая
+# Render.com Blueprint — разворачивает backend API (он же отдаёт frontend,
+# см. app/main.py — вся статика идёт из того же процесса, одним доменом)
+# и PostgreSQL. Фоновый worker (app/worker/runner.py) сюда НЕ включён — у
+# Render нет бесплатного тарифа для Background Worker, поэтому по решению
+# владельца worker продолжает работать локально, подключаясь к этой же
+# базе/Redis по внешним (External) адресам. Подробная пошаговая
 # инструкция — docs/DEPLOY_RENDER.md (там же — почему часть переменных
 # окружения помечена sync: false и заполняется вручную в панели Render).
 
@@ -33,12 +34,6 @@ services:
         generateValue: true
       - key: COOKIE_SECURE
         value: "true"
-      - key: COOKIE_DOMAIN
-        value: ""
-      - key: COOKIE_SAMESITE
-        value: none
-      - key: FRONTEND_ORIGIN
-        sync: false
       - key: LLM_PROVIDER
         value: yandexgpt_pro_5_1
       - key: YANDEX_FOLDER_ID
@@ -53,10 +48,3 @@ services:
         value: not_configured
       - key: LOG_LEVEL
         value: INFO
-
-  - type: web
-    name: pravovoy-potok-frontend
-    env: static
-    rootDir: legal-flow
-    buildCommand: ""
-    staticPublishPath: ./frontend

@@ -1,8 +1,11 @@
 import logging
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
 from app.errors import AppError, app_error_handler, request_validation_error_handler
@@ -53,5 +56,13 @@ def create_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001 -- readiness probe must report, not crash
             return {"status": "error", "detail": str(exc)}
         return {"status": "ok"}
+
+    # Отдаём frontend прямо из backend-процесса — так весь сайт живёт на одном
+    # домене (не нужны CORS/куки между сайтами, отдельный статический сервер
+    # и синхронизация двух адресов при деплое). Смонтировано ПОСЛЕДНИМ, чтобы
+    # API-роуты (/api/v1/..., /health/...) matched первыми.
+    frontend_dir = Path(__file__).resolve().parent.parent / "frontend"
+    if frontend_dir.is_dir():
+        app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
 
     return app
