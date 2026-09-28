@@ -19,8 +19,7 @@ services:
     env: docker
     rootDir: legal-flow
     dockerfilePath: ./Dockerfile
-    dockerCommand: >-
-      sh -c "alembic upgrade head && uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000"
+    dockerCommand: ./docker-entrypoint.sh
     plan: free
     healthCheckPath: /health/live
     envVars:
