@@ -166,6 +166,19 @@
     return '<div class="field"><label for="' + id + '">' + label + '</label><input type="' + (type || 'text') + '" id="' + id + '" value="' + esc(initial || '') + '"><span class="error" id="err-' + id + '"></span></div>';
   }
 
+  var THEME_CATEGORIES = [
+    'Уголовные дела экономической направленности',
+    'Корпоративные споры',
+    'Банкротство',
+    'Налоговые споры',
+    'Трудовые споры',
+    'Интеллектуальная собственность',
+    'Антимонопольное регулирование',
+    'Административные правонарушения',
+    'Земельные и имущественные споры',
+    'Семейное право'
+  ];
+
   function go(route, opts) {
     opts = opts || {};
     state.route = route;
@@ -306,7 +319,11 @@
         ? '<p class="notice">Сайты после создания потока управляются на странице «Источники». Текущие: ' + esc((state.flow.sources || []).map(function (s) { return s.domain; }).join(', ') || '—') + '</p>'
         : '<div class="field"><label for="setup-sites">Домены по одному на строке</label><textarea id="setup-sites">' + esc(state.setupSites) + '</textarea><span class="error" id="err-setup-sites"></span></div>');
     } else if (i === 1) {
-      body = '<h3>Тематика</h3>' + field('setup-theme', 'Тема потока', 'text', state.setupTheme);
+      body = '<h3>Тематика</h3><div class="field"><label for="setup-category">Готовая категория (необязательно)</label>'
+        + '<select id="setup-category"><option value="">— выбрать из списка —</option>'
+        + THEME_CATEGORIES.map(function (c) { return '<option ' + (c === state.setupTheme ? 'selected' : '') + '>' + esc(c) + '</option>'; }).join('')
+        + '</select></div>'
+        + field('setup-theme', 'Тема потока (можно уточнить своими ключевыми словами)', 'text', state.setupTheme);
     } else if (i === 2) {
       body = '<h3>Расписание</h3><div class="field"><label for="setup-period">Периодичность</label><select id="setup-period">' + allowedPeriods.map(function (v) { return '<option ' + (v === state.setupPeriod ? 'selected' : '') + '>' + v + '</option>'; }).join('') + '</select>' + (allowedPeriods.length < 4 ? '<p class="small">Текущий тариф допускает только ручной или ежедневный запуск.</p>' : '') + '</div>' + field('setup-time', 'Время, Москва UTC+3', 'time', state.setupTime);
     } else {
@@ -798,6 +815,10 @@
   });
   document.addEventListener('change', function (e) {
     if (e.target.id === 'source-filter') { state.newsSourceFilter = e.target.value; loadNews().then(function () { document.getElementById('news-results').innerHTML = newsRowsHtml(); }); }
+    if (e.target.id === 'setup-category' && e.target.value) {
+      var themeInput = document.getElementById('setup-theme');
+      if (themeInput) themeInput.value = e.target.value;
+    }
     if (e.target.hasAttribute('data-toggle')) {
       if (!gate()) { e.target.checked = !e.target.checked; return; }
       var id = e.target.dataset.toggle, checked = e.target.checked;

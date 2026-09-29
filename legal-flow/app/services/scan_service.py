@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +11,63 @@ from app.providers.fixture_source import FixtureSourceProvider
 from app.services.activity_service import log_activity
 
 PROVIDERS = {"fixture": FixtureSourceProvider()}
+
+MOSCOW_TZ = timezone(timedelta(hours=3))
+
+
+async def get_or_create_scan_job(
+    db: AsyncSession, *, flow_id: uuid.UUID, idempotency_key: str, provider_name: str
+) -> ScanJob:
+    """Shared by the manual 'Приступить к сбору' endpoint and the schedule-based
+    auto-run below — same idempotency-key dedupe either way (ТЗ §9)."""
+    existing = await db.scalar(
+        select(ScanJob).where(ScanJob.flow_id == flow_id, ScanJob.idempotency_key == idempotency_key)
+    )
+    if existing is not None:
+        return existing
+    job = ScanJob(flow_id=flow_id, idempotency_key=idempotency_key, status=ScanJobStatus.pending, provider_name=provider_name)
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+    return job
+
+
+def _is_schedule_due(schedule_period: str, schedule_time: str, last_scan_at: datetime | None, now_moscow: datetime) -> bool:
+    if schedule_period == "Вручную":
+        return False
+    try:
+        due_hour, due_minute = (int(p) for p in schedule_time.split(":"))
+    except ValueError:
+        return False
+    if now_moscow.time() < time(due_hour, due_minute):
+        return False
+    if schedule_period == "По рабочим дням" and now_moscow.weekday() >= 5:
+        return False
+    if last_scan_at is None:
+        return True
+    last_scan_moscow = last_scan_at.astimezone(MOSCOW_TZ)
+    if schedule_period == "Раз в неделю":
+        return (now_moscow.date() - last_scan_moscow.date()).days >= 7
+    return now_moscow.date() > last_scan_moscow.date()
+
+
+async def enqueue_due_scheduled_scans(db: AsyncSession) -> list[uuid.UUID]:
+    """Called periodically by the worker (ТЗ: сбор день в день / с периодичностью,
+    без нажатия кнопки). For each flow whose schedule is due, enqueues one scan job
+    (reusing the pending one if a previous check already created it today) and
+    advances last_scan_at so the same day never fires twice."""
+    now_moscow = datetime.now(MOSCOW_TZ)
+    flows = (await db.scalars(select(NewsFlow).where(NewsFlow.schedule_period != "Вручную"))).all()
+    created_job_ids: list[uuid.UUID] = []
+    for flow in flows:
+        if not _is_schedule_due(flow.schedule_period, flow.schedule_time, flow.last_scan_at, now_moscow):
+            continue
+        key = f"auto-schedule-{now_moscow.date().isoformat()}"
+        job = await get_or_create_scan_job(db, flow_id=flow.id, idempotency_key=key, provider_name="fixture")
+        flow.last_scan_at = now_moscow
+        await db.commit()
+        created_job_ids.append(job.id)
+    return created_job_ids
 
 
 async def _policy_cleared_domains(db: AsyncSession, domains: list[str]) -> tuple[list[str], list[str]]:

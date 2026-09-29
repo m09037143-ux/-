@@ -6,7 +6,11 @@
 само по себе и есть очередь. Это также значит, что worker'у для работы нужен
 только доступ к Postgres, не к Redis — важно, когда worker запущен отдельно
 от API (например, локально, а API — в облаке с закрытым для внешних
-подключений Redis)."""
+подключений Redis).
+
+Помимо этого, раз в _SCHEDULE_CHECK_INTERVAL_SECONDS проверяет расписание
+потоков (schedule_period/schedule_time) и сам создаёт scan_job для тех, кому
+пора — это и есть автозапуск сбора без нажатия кнопки."""
 
 import asyncio
 import logging
@@ -19,11 +23,12 @@ from app.config import get_settings
 from app.db import get_session_factory
 from app.models import ScanJob
 from app.models.enums import ScanJobStatus
-from app.services.scan_service import process_scan_job
+from app.services.scan_service import enqueue_due_scheduled_scans, process_scan_job
 
 logger = logging.getLogger("app.worker")
 
 _POLL_INTERVAL_SECONDS = 0.5
+_SCHEDULE_CHECK_INTERVAL_SECONDS = 60.0
 
 
 async def fetch_next_pending_job_id(db: AsyncSession) -> uuid.UUID | None:
@@ -42,7 +47,18 @@ async def run_forever() -> None:
     logging.basicConfig(level=settings.log_level)
     logger.info("Правовой Поток worker запущен, опрос таблицы scan_jobs")
     session_factory = get_session_factory()
+    loop = asyncio.get_event_loop()
+    last_schedule_check = 0.0
     while True:
+        if loop.time() - last_schedule_check >= _SCHEDULE_CHECK_INTERVAL_SECONDS:
+            last_schedule_check = loop.time()
+            try:
+                async with session_factory() as db:
+                    for job_id in await enqueue_due_scheduled_scans(db):
+                        logger.info("Автозапуск по расписанию создал scan_job %s", job_id)
+            except Exception:  # noqa: BLE001 -- one bad check must not kill the worker
+                logger.exception("Ошибка проверки расписания потоков")
+
         found = False
         try:
             async with session_factory() as db:

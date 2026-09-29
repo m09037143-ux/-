@@ -48,6 +48,7 @@ class NewsFlow(Base, UUIDPk, TimestampMixin):
     schedule_period: Mapped[str] = mapped_column(String(50), nullable=False, default="Вручную")
     schedule_time: Mapped[str] = mapped_column(String(5), nullable=False, default="09:00")
     news_limit_per_run: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    last_scan_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class SourceSite(Base, UUIDPk, TimestampMixin):

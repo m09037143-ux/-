@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header
 from sqlalchemy import func, select
@@ -8,7 +9,7 @@ from app.db import get_db
 from app.deps import get_current_membership, require_active_access, require_csrf, require_role
 from app.errors import AppError
 from app.models import Discovery, Membership, NewsFlow, ScanJob, SourceSite
-from app.models.enums import Role, ScanJobStatus
+from app.models.enums import Role
 from app.schemas.flows import (
     AddSourceRequest,
     CreateFlowRequest,
@@ -18,7 +19,7 @@ from app.schemas.flows import (
     UpdateFlowRequest,
     UpdateSourceRequest,
 )
-from app.services import flow_service
+from app.services import flow_service, scan_service
 from app.services.rate_limit import enforce_rate_limit
 from app.config import get_settings
 
@@ -167,16 +168,12 @@ async def create_scan_job(
     flow = await _get_owned_flow(db, membership, flow_id)
     key = idempotency_key or f"auto-{uuid.uuid4()}"
 
-    existing = await db.scalar(
-        select(ScanJob).where(ScanJob.flow_id == flow.id, ScanJob.idempotency_key == key)
-    )
-    if existing is not None:
-        job = existing
-    else:
-        job = ScanJob(flow_id=flow.id, idempotency_key=key, status=ScanJobStatus.pending, provider_name="fixture")
-        db.add(job)
-        await db.commit()
-        await db.refresh(job)
+    job = await scan_service.get_or_create_scan_job(db, flow_id=flow.id, idempotency_key=key, provider_name="fixture")
+    # Manual run also counts as "checked now" — the schedule-based auto-run (see
+    # scan_service.enqueue_due_scheduled_scans) skips the same day so it doesn't
+    # collect twice right after a manual click.
+    flow.last_scan_at = datetime.now(timezone.utc)
+    await db.commit()
 
     return ScanJobOut(
         id=job.id,
