@@ -206,6 +206,12 @@
     if (a.trial_state === 'expired' && !a.can_mutate) {
       return '<div class="banner expired"><div><strong>Демонстрационный доступ завершён</strong><p>Материалы доступны для просмотра, новые действия заблокированы. Списаний нет.</p></div>' + button('Выбрать тариф', 'pricing', 'primary') + '</div>';
     }
+    if (a.trial_state === 'expired' && a.can_mutate) {
+      // Демо истекло, но доступ есть не по демо — платная подписка или platform_admin
+      // (см. trial_service.has_mutating_access): показывать обратный отсчёт демо тут
+      // уже не к месту.
+      return '<div class="banner"><div><strong>Тариф: ' + esc(a.plan_name || a.plan_code || '—') + '</strong></div></div>';
+    }
     var endsAt = new Date(a.trial_ends_at);
     var left = Math.max(0, endsAt - new Date());
     var leftStr = left > 86400000 ? Math.ceil(left / 86400000) + ' дн.' : Math.ceil(left / 3600000) + ' ч.';
@@ -578,10 +584,11 @@
   async function collect() {
     if (!gate()) return;
     if (!state.flow) { toast('Сначала настройте поток'); return; }
-    modal('Запустить сбор?', '<p>Будет запущено реальное фоновое задание (провайдер DEMO_FIXTURE). Настоящие сайты не анализируются.</p>', 'Запустить', async function () {
+    modal('Запустить сбор?', '<p>Будет запущено фоновое задание сбора материалов по источникам потока.</p>', 'Запустить', async function () {
       try {
         state.scanJobStatus = 'pending'; state.scanJobProgress = 15; render();
         var job = await api('/api/v1/flows/' + state.flow.id + '/scan-jobs', { method: 'POST', headers: { 'Idempotency-Key': uuid() } });
+        var providerName = job.provider_name;
         for (var i = 0; i < 40; i++) {
           job = await api('/api/v1/scan-jobs/' + job.id);
           state.scanJobStatus = job.status;
@@ -591,9 +598,10 @@
           await sleep(700);
         }
         if (job.status === 'done') {
-          var msg = 'Сбор завершён: добавлено материалов — ' + job.created_news_ids.length;
+          var providerNote = providerName === 'fixture' ? ' (демонстрационные материалы — DEMO_FIXTURE, настоящие сайты не анализировались)' : '';
+          var msg = 'Сбор завершён: добавлено материалов — ' + job.created_news_ids.length + providerNote;
           if (job.created_news_ids.length === 0 && job.duplicate_count > 0) {
-            msg = 'Сбор завершён: новых материалов нет — все ' + job.duplicate_count + ' найденных уже собраны ранее (см. «Новости»).';
+            msg = 'Сбор завершён: новых материалов нет — все ' + job.duplicate_count + ' найденных уже собраны ранее (см. «Новости»)' + providerNote + '.';
           }
           toast(msg); await loadNews(); render();
         }
