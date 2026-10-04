@@ -68,8 +68,11 @@ async def run_forever() -> None:
                 else:
                     found = True
                     try:
-                        await process_scan_job(db, job_id)
-                        logger.info("scan_job %s обработан", job_id)
+                        job = await process_scan_job(db, job_id)
+                        logger.info(
+                            "scan_job %s обработан: provider=%s, новых материалов=%d",
+                            job_id, job.provider_name, len(job.created_news_ids),
+                        )
                     except Exception:  # noqa: BLE001 -- worker must keep running past one bad job
                         logger.exception("Ошибка обработки scan_job %s", job_id)
         except Exception:  # noqa: BLE001 -- a transient DB hiccup must not kill the worker
