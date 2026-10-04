@@ -95,6 +95,7 @@
     editingDraft: false,
     scanJobStatus: null,
     scanJobProgress: 0,
+    scanJobProviderName: null,
     exportsList: [],
     publishedCount: 0,
     activityList: [],
@@ -292,7 +293,12 @@
       : state.scanJobStatus === 'done' ? 'Последний запуск завершён'
       : state.scanJobStatus === 'failed' ? 'Последний запуск завершился с ошибкой'
       : 'Ожидает запуска';
-    return '<div class="card"><h3>Фоновая задача сбора</h3><p>' + label + '</p><div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + state.scanJobProgress + '"><span style="width:' + state.scanJobProgress + '%"></span></div><p class="small" style="margin-top:15px">Провайдер — DEMO_FIXTURE: реальные сайты не анализируются (см. docs/ROADMAP.md).</p>' + button(state.flow ? 'Настроить поток' : 'Создать поток', 'setup') + '</div>';
+    var providerNote = state.scanJobProviderName === 'fixture'
+      ? 'Последний запуск: провайдер DEMO_FIXTURE — реальные сайты не анализировались.'
+      : state.scanJobProviderName === 'html'
+        ? 'Последний запуск: реальный сбор с сайтов потока.'
+        : 'Провайдер зависит от источников потока — DEMO_FIXTURE для ещё не поддержанных сайтов, реальный сбор для garant.ru/pravo.ru (см. docs/ROADMAP.md).';
+    return '<div class="card"><h3>Фоновая задача сбора</h3><p>' + label + '</p><div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + state.scanJobProgress + '"><span style="width:' + state.scanJobProgress + '%"></span></div><p class="small" style="margin-top:15px">' + providerNote + '</p>' + button(state.flow ? 'Настроить поток' : 'Создать поток', 'setup') + '</div>';
   }
 
   function currentNewsSource() { return state.user ? state.news : state.guestNews; }
@@ -354,7 +360,7 @@
 
   function newsPage() {
     var domains = state.flow ? (state.flow.sources || []).map(function (s) { return s.domain; }) : Array.from(new Set(state.guestNews.map(function (x) { return x.discovery_domain; })));
-    return page('Новости', '<div class="filters"><input class="filter" id="search" placeholder="Поиск по заголовку" aria-label="Поиск" value="' + esc(state.newsQuery) + '"><select class="filter" id="source-filter" aria-label="Сайт"><option>Все</option>' + domains.map(function (d) { return '<option ' + (d === state.newsSourceFilter ? 'selected' : '') + '>' + esc(d) + '</option>'; }).join('') + '</select><span></span></div><div class="tabs">' + Object.keys(TAB_TO_STATUS).map(function (v) { return '<button data-tab="' + v + '" class="' + (state.newsTab === v ? 'active' : '') + '">' + v + '</button>'; }).join('') + '</div><div id="news-results" class="card table-scroll">' + newsRowsHtml() + '</div>', 'Материалы и редакционные статусы', state.flow ? button('▶ Приступить к сбору', 'collect', 'primary') : '');
+    return page('Новости', '<div class="filters"><input class="filter" id="search" placeholder="Поиск по заголовку" aria-label="Поиск" value="' + esc(state.newsQuery) + '"><select class="filter" id="source-filter" aria-label="Сайт"><option>Все</option>' + domains.map(function (d) { return '<option ' + (d === state.newsSourceFilter ? 'selected' : '') + '>' + esc(d) + '</option>'; }).join('') + '</select><span></span></div><div class="tabs">' + Object.keys(TAB_TO_STATUS).map(function (v) { return '<button data-tab="' + v + '" class="' + (state.newsTab === v ? 'active' : '') + '">' + v + '</button>'; }).join('') + '</div><div id="news-results" class="card table-scroll">' + newsRowsHtml() + '</div>' + (state.flow ? progressCard() : ''), 'Материалы и редакционные статусы', state.flow ? button('▶ Приступить к сбору', 'collect', 'primary') : '');
   }
 
   function officialBlock(doc) {
@@ -589,6 +595,7 @@
         state.scanJobStatus = 'pending'; state.scanJobProgress = 15; render();
         var job = await api('/api/v1/flows/' + state.flow.id + '/scan-jobs', { method: 'POST', headers: { 'Idempotency-Key': uuid() } });
         var providerName = job.provider_name;
+        state.scanJobProviderName = providerName;
         for (var i = 0; i < 40; i++) {
           job = await api('/api/v1/scan-jobs/' + job.id);
           state.scanJobStatus = job.status;
