@@ -3,13 +3,11 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
 from app.db import get_db
 from app.deps import get_current_membership
-from app.models import Membership, Plan
+from app.models import Membership
 from app.schemas.access import AccessResponse
 from app.services import trial_service
-from app.services.billing_service import get_plan_by_code
 
 router = APIRouter(prefix="/api/v1", tags=["access"])
 
@@ -19,16 +17,13 @@ async def get_access(
     membership: Membership = Depends(get_current_membership),
     db: AsyncSession = Depends(get_db),
 ):
-    settings = get_settings()
     trial = await trial_service.get_trial(db, membership.workspace_id)
     state = trial_service.trial_state(trial)
-    sub = await trial_service.get_active_subscription(db, membership.workspace_id)
     can_mutate = await trial_service.has_mutating_access(db, membership.workspace_id)
-
-    if sub is not None:
-        plan = await db.get(Plan, sub.plan_id)
-    else:
-        plan = await get_plan_by_code(db, settings.trial_plan_code)
+    # Same plan resolution flow_service uses to enforce limits (paid subscription,
+    # else the top tier for a platform_admin's workspace, else the trial tier) —
+    # kept in one place so the displayed plan always matches what's enforced.
+    plan = await trial_service.get_effective_plan(db, membership.workspace_id)
 
     return AccessResponse(
         role=membership.role.value,
