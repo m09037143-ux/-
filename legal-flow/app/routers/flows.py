@@ -168,7 +168,10 @@ async def create_scan_job(
     flow = await _get_owned_flow(db, membership, flow_id)
     key = idempotency_key or f"auto-{uuid.uuid4()}"
 
-    job = await scan_service.get_or_create_scan_job(db, flow_id=flow.id, idempotency_key=key, provider_name="fixture")
+    provider_name = await scan_service.provider_name_for_flow(db, flow.id)
+    job = await scan_service.get_or_create_scan_job(
+        db, flow_id=flow.id, idempotency_key=key, provider_name=provider_name
+    )
     # Manual run also counts as "checked now" — the schedule-based auto-run (see
     # scan_service.enqueue_due_scheduled_scans) skips the same day so it doesn't
     # collect twice right after a manual click.

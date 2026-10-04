@@ -8,11 +8,23 @@ from app.models import Discovery, NewsFlow, NewsItem, ScanJob, SourcePolicy, Sou
 from app.models.enums import NewsStatus, ScanJobStatus
 from app.providers.base import CandidateItem
 from app.providers.fixture_source import FixtureSourceProvider
+from app.providers.html_source import SUPPORTED_DOMAINS as HTML_SUPPORTED_DOMAINS, HtmlSourceProvider
 from app.services.activity_service import log_activity
 
-PROVIDERS = {"fixture": FixtureSourceProvider()}
+PROVIDERS = {"fixture": FixtureSourceProvider(), "html": HtmlSourceProvider()}
 
 MOSCOW_TZ = timezone(timedelta(hours=3))
+
+
+async def provider_name_for_flow(db: AsyncSession, flow_id: uuid.UUID) -> str:
+    """"html" (реальный сбор) только если ВСЕ активные домены потока поддержаны
+    HtmlSourceProvider; иначе "fixture" — чтобы не пытаться скрести произвольные сайты."""
+    domains = (
+        await db.scalars(select(SourceSite.domain).where(SourceSite.flow_id == flow_id, SourceSite.active.is_(True)))
+    ).all()
+    if domains and all(d in HTML_SUPPORTED_DOMAINS for d in domains):
+        return "html"
+    return "fixture"
 
 
 async def get_or_create_scan_job(
@@ -63,7 +75,8 @@ async def enqueue_due_scheduled_scans(db: AsyncSession) -> list[uuid.UUID]:
         if not _is_schedule_due(flow.schedule_period, flow.schedule_time, flow.last_scan_at, now_moscow):
             continue
         key = f"auto-schedule-{now_moscow.date().isoformat()}"
-        job = await get_or_create_scan_job(db, flow_id=flow.id, idempotency_key=key, provider_name="fixture")
+        provider_name = await provider_name_for_flow(db, flow.id)
+        job = await get_or_create_scan_job(db, flow_id=flow.id, idempotency_key=key, provider_name=provider_name)
         flow.last_scan_at = now_moscow
         await db.commit()
         created_job_ids.append(job.id)
