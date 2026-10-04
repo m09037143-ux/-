@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     fetch_max_bytes: int = 2_000_000
     fetch_timeout_seconds: float = 8.0
     fetch_max_redirects: int = 3
+    # Тот же явный переключатель, что и llm_fixture_mode — никогда не выбирается тихо
+    # по догадке (например, "эти домены я вроде умею разбирать"). true — весь сбор идёт
+    # через FixtureSourceProvider (вымышленные материалы, в сеть не ходит); false — нужен
+    # явно, обычно только в проде, чтобы включить HtmlSourceProvider для домена.
+    source_fixture_mode: bool = True
 
     rate_limit_register_per_hour: int = 10
     rate_limit_login_per_15min: int = 10

@@ -16,6 +16,7 @@ os.environ.setdefault("CSRF_SECRET", "test-secret")
 os.environ.setdefault("PAYMENT_PROVIDER", "fake")
 os.environ.setdefault("PAYMENT_WEBHOOK_SECRET", "test-webhook-secret")
 os.environ.setdefault("LLM_FIXTURE_MODE", "true")
+os.environ.setdefault("SOURCE_FIXTURE_MODE", "true")
 
 from app.config import get_settings  # noqa: E402
 from app.db import Base, reset_engine_for_tests, get_engine  # noqa: E402

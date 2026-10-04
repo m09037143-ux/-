@@ -4,6 +4,7 @@ from datetime import datetime, time, timedelta, timezone
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.models import Discovery, NewsFlow, NewsItem, ScanJob, SourcePolicy, SourceSite, Story
 from app.models.enums import NewsStatus, ScanJobStatus
 from app.providers.base import CandidateItem
@@ -17,8 +18,12 @@ MOSCOW_TZ = timezone(timedelta(hours=3))
 
 
 async def provider_name_for_flow(db: AsyncSession, flow_id: uuid.UUID) -> str:
-    """"html" (реальный сбор) только если ВСЕ активные домены потока поддержаны
-    HtmlSourceProvider; иначе "fixture" — чтобы не пытаться скрести произвольные сайты."""
+    """"html" (реальный сбор) только если SOURCE_FIXTURE_MODE явно выключен (тот же
+    принцип, что и LLM_FIXTURE_MODE — никогда не выбирается молча по догадке) И ВСЕ
+    активные домены потока поддержаны HtmlSourceProvider; иначе "fixture", чтобы не
+    пытаться скрести произвольные сайты."""
+    if get_settings().source_fixture_mode:
+        return "fixture"
     domains = (
         await db.scalars(select(SourceSite.domain).where(SourceSite.flow_id == flow_id, SourceSite.active.is_(True)))
     ).all()

@@ -47,6 +47,8 @@ services:
         sync: false
       - key: LLM_FIXTURE_MODE
         value: "false"
+      - key: SOURCE_FIXTURE_MODE
+        value: "false"
       - key: PAYMENT_PROVIDER
         value: not_configured
       - key: LOG_LEVEL
