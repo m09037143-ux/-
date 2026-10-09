@@ -111,6 +111,7 @@
     setupKeywords: '',
     setupStopWords: '',
     setupSyncedFlowId: null,
+    setupRights: false,
     setupPeriod: 'По рабочим дням',
     setupTime: '09:00',
     setupLimit: 3,
@@ -271,7 +272,7 @@
     var q = [
       ['Как зарегистрироваться?', 'Нажмите «Зарегистрироваться» в шапке и укажите имя, email и пароль.'],
       ['Как работает три дня?', '72 часа отсчитывает сервер с момента регистрации; сброс браузера или повторный вход срок не продлевают и не сбрасывают.'],
-      ['Откуда берутся новости?', 'Пока из демонстрационного набора (DEMO_FIXTURE): реальный сбор с сайтов ещё не подключён с их стороны.'],
+      ['Откуда берутся новости?', 'С сайтов, которые вы добавляете в поток: система проверяет robots.txt, находит ленту (RSS/Atom, sitemap или список статей) и собирает материалы по расписанию. Публикации автоматом нет — каждый материал проверяет редактор. В демо-режиме сервера вместо этого показываются демонстрационные материалы (DEMO_FIXTURE).'],
       ['Можно оплатить картой?', 'Пока нет — платёжный провайдер не подключён, кнопка оплаты вернёт понятное сообщение об этом.']
     ];
     return '<div class="wrap section" style="max-width:850px"><h1>FAQ</h1>' + q.map(function (x) { return '<details class="card" style="margin:10px 0"><summary style="cursor:pointer;font-weight:700">' + x[0] + '</summary><p style="margin:13px 0 0">' + x[1] + '</p></details>'; }).join('') + '</div>';
@@ -307,7 +308,7 @@
       ? 'Последний запуск: провайдер DEMO_FIXTURE — реальные сайты не анализировались.'
       : state.scanJobProviderName === 'html'
         ? 'Последний запуск: реальный сбор с сайтов потока.'
-        : 'Провайдер зависит от источников потока — DEMO_FIXTURE для ещё не поддержанных сайтов, реальный сбор для garant.ru/pravo.ru (см. docs/ROADMAP.md).';
+        : 'Сбор идёт по ленте каждого сайта потока (RSS, sitemap или список статей); демонстрационные материалы DEMO_FIXTURE — только в демо-режиме сервера.';
     return '<div class="card"><h3>Фоновая задача сбора</h3><p>' + label + '</p><div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + state.scanJobProgress + '"><span style="width:' + state.scanJobProgress + '%"></span></div><p class="small" style="margin-top:15px">' + providerNote + '</p>' + button(state.flow ? 'Настроить поток' : 'Создать поток', 'setup') + '</div>';
   }
 
@@ -346,7 +347,8 @@
     if (i === 0) {
       body = '<h3>Сайты</h3>' + (hasFlow
         ? '<p class="notice">Сайты после создания потока управляются на странице «Источники». Текущие: ' + esc((state.flow.sources || []).map(function (s) { return s.domain; }).join(', ') || '—') + '</p>'
-        : '<div class="field"><label for="setup-sites">Домены по одному на строке</label><textarea id="setup-sites">' + esc(state.setupSites) + '</textarea><span class="error" id="err-setup-sites"></span></div>');
+        : '<div class="field"><label for="setup-sites">Домены по одному на строке</label><textarea id="setup-sites">' + esc(state.setupSites) + '</textarea><span class="error" id="err-setup-sites"></span></div>'
+          + '<label class="small" style="display:flex;gap:9px;align-items:flex-start"><input type="checkbox" id="setup-rights" style="margin-top:3px" ' + (state.setupRights ? 'checked' : '') + '><span>Для сайтов, кроме garant.ru, pravo.ru и consultant.ru: подтверждаю, что вправе использовать их материалы. Система проверит robots.txt и сама найдёт ленту новостей.</span></label>');
     } else if (i === 1) {
       body = '<h3>Тематика</h3><div class="field"><label for="setup-category">Готовая категория (необязательно)</label>'
         + '<select id="setup-category"><option value="">— выбрать из списка —</option>'
@@ -416,23 +418,21 @@
     return page(esc(d.title), '<p>' + button('← Новости', 'news') + ' · ' + badge(d.status) + '</p><div class="detail"><div class="card"><div class="tabs">' + ['Текст для публикации', 'Источник обнаружения', 'Официальные источники', 'Паспорт фактов', 'Предпросмотр для читателя', 'История'].map(function (v) { return '<button data-detail="' + v + '" class="' + (v === tab ? 'active' : '') + '">' + v + '</button>'; }).join('') + '</div>' + main + '</div><aside class="card"><h3>Редакторский контроль</h3><p>' + badge(d.status) + '</p><p class="small">Сайт обнаружения: ' + esc(d.discovery_domain) + ' — только редактору</p><p class="small">Официальный документ: ' + (d.official_document && d.official_document.url ? 'указан' : 'не указан') + '</p><p class="small">Реквизиты проверены: ' + (d.official_reviewed ? 'да' : 'нет') + '</p><p class="small">Факты проверены: ' + (d.facts_reviewed ? 'да' : 'нет') + '</p><p class="notice warning">Все решения — только вручную, автопубликации нет.</p><div style="display:grid;gap:9px">' + button(state.editingDraft ? 'Сохранить черновик' : 'Редактировать', state.editingDraft ? 'saveDraft' : 'edit') + (d.status === 'PUBLISHED' ? '' : button('Проверка редактором', 'review', 'secondary') + button('Утвердить материал', 'approve', 'primary') + (d.status === 'APPROVED' ? button('Опубликовать', 'publish', 'primary') : '') + button('Отклонить', 'reject')) + '</div></aside></div>');
   }
 
+  var SOURCE_KIND_LABELS = { builtin: 'готовый разбор сайта', feed: 'RSS/Atom-лента', sitemap: 'новостной sitemap', html: 'список статей (эвристика)' };
+
   function sourcesPage() {
     if (!state.flow) return page('Сайты для обнаружения тем', '<p class="notice">Сначала создайте поток.</p>', '', button('Создать поток', 'setup', 'primary'));
     var sources = state.flow.sources || [];
-    var activeSources = sources.filter(function (x) { return x.active; });
-    var activeSupported = activeSources.filter(function (x) { return x.html_supported; });
-    var mixedActiveSources = activeSupported.length > 0 && activeSupported.length < activeSources.length;
-    var notice = mixedActiveSources
-      ? '<p class="notice warning">В потоке активны и сайты с реальным сбором, и пока не поддержанные — пока активен ' +
-        'хотя бы один неподдерживаемый сайт, весь сбор идёт через демо-материалы (DEMO_FIXTURE). Отключите ' +
-        'неподдерживаемые сайты (снимите «Активен»), чтобы включить реальный сбор для остальных.</p>'
-      : '';
+    var notice = state.flow.real_collection_enabled ? ''
+      : '<p class="notice warning">Сейчас включён демонстрационный режим: сбор идёт по демо-материалам (DEMO_FIXTURE), реальные сайты не анализируются. Реальный сбор включает администратор сервера.</p>';
     return page('Сайты для обнаружения тем', notice + '<div style="display:grid;gap:12px">' + sources.map(function (x) {
-      var badge = x.html_supported
-        ? '<span class="status ready">Реальный сбор</span>'
-        : '<span class="status draft">Демо (DEMO_FIXTURE)</span>';
-      return '<div class="card row"><div><strong>' + esc(x.domain) + '</strong> ' + badge + '<p class="small">Права и доступность не проверены автоматически.</p></div><div class="row"><label><input type="checkbox" data-toggle="' + x.id + '" ' + (x.active ? 'checked' : '') + '> Активен</label>' + button('Изменить', 'editSource', '', 'data-id="' + x.id + '"') + button('Удалить', 'deleteSource', '', 'data-id="' + x.id + '"') + '</div></div>';
-    }).join('') + '</div>', 'Сайты обнаружения не являются официальными документами', button('Добавить сайт', 'addSource'));
+      var ready = x.status === 'ready';
+      var badge = ready
+        ? '<span class="status ready">Сбор: ' + esc(SOURCE_KIND_LABELS[x.kind] || 'настроен') + '</span>'
+        : '<span class="status draft">Нет способа сбора</span>';
+      var note = ready ? (x.status_note || 'Право использования подтверждено, robots.txt соблюдается.') : (x.status_note || 'Способ сбора ещё не определён — проверим при следующем сборе.');
+      return '<div class="card row"><div><strong>' + esc(x.domain) + '</strong> ' + badge + '<p class="small">' + esc(note) + '</p></div><div class="row"><label><input type="checkbox" data-toggle="' + x.id + '" ' + (x.active ? 'checked' : '') + '> Активен</label>' + button('Изменить', 'editSource', '', 'data-id="' + x.id + '"') + button('Удалить', 'deleteSource', '', 'data-id="' + x.id + '"') + '</div></div>';
+    }).join('') + '</div>', 'Добавьте любой новостной сайт: система проверит robots.txt, найдёт ленту и будет собирать материалы сама. Сайты обнаружения не являются официальными документами.', button('Добавить сайт', 'addSource'));
   }
 
   function schedulePage() {
@@ -657,7 +657,8 @@
         reason: value('reject-reason'),
         official: !!(document.getElementById('check-official') || {}).checked,
         facts: !!(document.getElementById('check-facts') || {}).checked,
-        newPassword: value('modal-new-password')
+        newPassword: value('modal-new-password'),
+        rights: !!(document.getElementById('modal-rights') || {}).checked
       };
       closeModal();
       if (fn) { try { await fn(data); } catch (err) { toast(err.message, true); } }
@@ -721,6 +722,7 @@
           var sites = value('setup-sites');
           if (!sites || !sites.split(/\n/).every(function (z) { return /^(?:[a-z\d-]+\.)+[a-z]{2,}$/i.test(z.trim()); })) { document.getElementById('err-setup-sites').textContent = 'Укажите домены по одному на строке'; return; }
           state.setupSites = sites;
+          state.setupRights = !!(document.getElementById('setup-rights') || {}).checked;
         } else if (state.setupStep === 1) {
           state.setupTheme = value('setup-theme');
           state.setupKeywords = value('setup-keywords'); state.setupStopWords = value('setup-stopwords');
@@ -733,7 +735,7 @@
         }
         if (a === 'setupSave') {
           if (!state.flow) {
-            state.flow = await api('/api/v1/flows', { method: 'POST', body: { name: state.setupTheme, theme: state.setupTheme, schedule_period: state.setupPeriod, schedule_time: state.setupTime, news_limit_per_run: state.setupLimit, keywords: splitWords(state.setupKeywords), stop_words: splitWords(state.setupStopWords), domains: state.setupSites.split(/\n/).map(function (s) { return s.trim(); }).filter(Boolean) } });
+            state.flow = await api('/api/v1/flows', { method: 'POST', body: { name: state.setupTheme, theme: state.setupTheme, schedule_period: state.setupPeriod, schedule_time: state.setupTime, news_limit_per_run: state.setupLimit, keywords: splitWords(state.setupKeywords), stop_words: splitWords(state.setupStopWords), rights_confirmed: state.setupRights, domains: state.setupSites.split(/\n/).map(function (s) { return s.trim(); }).filter(Boolean) } });
           } else {
             state.flow = await api('/api/v1/flows/' + state.flow.id, { method: 'PATCH', body: { theme: state.setupTheme, keywords: splitWords(state.setupKeywords), stop_words: splitWords(state.setupStopWords), schedule_period: state.setupPeriod, schedule_time: state.setupTime, news_limit_per_run: state.setupLimit } });
           }
@@ -802,11 +804,19 @@
       if (a === 'addSource' || a === 'editSource') {
         if (!gate()) return;
         var srcId = b.dataset.id, existing = srcId ? (state.flow.sources || []).find(function (s) { return s.id === srcId; }) : null;
-        modal(a === 'addSource' ? 'Добавить сайт' : 'Изменить сайт', field('modal-domain', 'Домен', 'text', existing ? existing.domain : ''), 'Сохранить', async function (data) {
-          if (!/^(?:[a-z\d-]+\.)+[a-z]{2,}$/i.test(data.domain)) return toast('Некорректный домен', true);
-          if (a === 'editSource') await api('/api/v1/flows/' + state.flow.id + '/sources/' + srcId, { method: 'PATCH', body: { domain: data.domain } });
-          else await api('/api/v1/flows/' + state.flow.id + '/sources', { method: 'POST', body: { domain: data.domain } });
-          await ensureFlow(); toast('Сайт сохранён'); render();
+        var rightsBox = '<label class="small" style="display:flex;gap:9px;margin:12px 0;align-items:flex-start"><input type="checkbox" id="modal-rights" style="margin-top:3px"><span>Подтверждаю, что вправе использовать материалы этого сайта. Система проверит robots.txt, сама найдёт ленту новостей (RSS, sitemap или список статей) и будет собирать только заголовки, анонсы и факты — без хранения полного текста.</span></label>';
+        modal(a === 'addSource' ? 'Добавить сайт' : 'Изменить сайт', field('modal-domain', 'Домен (например, example.ru)', 'text', existing ? existing.domain : '') + rightsBox, 'Сохранить', async function (data) {
+          var domain = String(data.domain || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+          if (!/^(?:[a-z\d-]+\.)+[a-z]{2,}$/i.test(domain)) return toast('Некорректный домен', true);
+          toast('Проверяем сайт: robots.txt и лента новостей — до минуты…');
+          var body = { domain: domain, rights_confirmed: !!data.rights };
+          if (a === 'editSource') await api('/api/v1/flows/' + state.flow.id + '/sources/' + srcId, { method: 'PATCH', body: body });
+          else await api('/api/v1/flows/' + state.flow.id + '/sources', { method: 'POST', body: body });
+          await ensureFlow();
+          var added = (state.flow.sources || []).find(function (s) { return s.domain === domain; });
+          if (added && added.status !== 'ready') toast('Сайт добавлен, но сбор пока невозможен: ' + added.status_note, true);
+          else toast('Сайт сохранён: ' + (added ? (SOURCE_KIND_LABELS[added.kind] || 'сбор настроен') : 'готово'));
+          render();
         });
         return;
       }

@@ -11,9 +11,10 @@ from app.models import Discovery, NewsFlow, NewsItem, ScanJob, SourcePolicy, Sou
 from app.models.enums import NewsStatus, ScanJobStatus
 from app.providers.base import CandidateItem
 from app.providers.fixture_source import FixtureSourceProvider
-from app.providers.html_source import SUPPORTED_DOMAINS as HTML_SUPPORTED_DOMAINS, HtmlSourceProvider
+from app.providers.html_source import SUPPORTED_DOMAINS as HTML_SUPPORTED_DOMAINS, HtmlSourceProvider, SourceHint
 from app.providers.yandex_gpt import YandexGPTPro51Provider
 from app.services.activity_service import log_activity
+from app.services.source_onboarding import SourceRejected, onboard_source
 
 logger = logging.getLogger("app.services.scan_service")
 
@@ -36,17 +37,13 @@ def theme_for_llm(flow: NewsFlow) -> str:
 
 async def provider_name_for_flow(db: AsyncSession, flow_id: uuid.UUID) -> str:
     """"html" (реальный сбор) только если SOURCE_FIXTURE_MODE явно выключен (тот же
-    принцип, что и LLM_FIXTURE_MODE — никогда не выбирается молча по догадке) И ВСЕ
-    активные домены потока поддержаны HtmlSourceProvider; иначе "fixture", чтобы не
-    пытаться скрести произвольные сайты."""
+    принцип, что и LLM_FIXTURE_MODE — никогда не выбирается молча по догадке) и в потоке
+    есть хотя бы один активный сайт. Сайты без готового способа сбора провайдер просто
+    пропускает, а причина видна в «Источниках» и журнале активности."""
     if get_settings().source_fixture_mode:
         return "fixture"
-    domains = (
-        await db.scalars(select(SourceSite.domain).where(SourceSite.flow_id == flow_id, SourceSite.active.is_(True)))
-    ).all()
-    if domains and all(d in HTML_SUPPORTED_DOMAINS for d in domains):
-        return "html"
-    return "fixture"
+    has_active = await db.scalar(select(SourceSite.id).where(SourceSite.flow_id == flow_id, SourceSite.active.is_(True)).limit(1))
+    return "html" if has_active else "fixture"
 
 
 async def get_or_create_scan_job(
@@ -134,6 +131,28 @@ async def _is_duplicate(db: AsyncSession, *, workspace_id: uuid.UUID, item: Cand
     return await db.scalar(stmt.limit(1))
 
 
+async def _prepare_generic_sources(db: AsyncSession, flow: NewsFlow, sites: list[SourceSite]) -> None:
+    """Сайты, добавленные пользователем, у которых способ сбора ещё не определён (сайт был
+    недоступен при добавлении) или ранее не нашёлся, определяем заново — с сохранённым
+    подтверждением права. Ошибка одного сайта не мешает остальным."""
+    for site in sites:
+        if site.domain in HTML_SUPPORTED_DOMAINS:
+            continue
+        if site.kind in ("feed", "sitemap", "html") and site.status == "ready":
+            continue
+        try:
+            result = await onboard_source(
+                db, domain=site.domain, confirmed=bool(site.rights_confirmed_by), confirmed_by=site.rights_confirmed_by
+            )
+            site.kind, site.list_url, site.status, site.status_note = result.kind, result.list_url, result.status, result.note
+        except SourceRejected as exc:
+            site.status, site.status_note = "unavailable", exc.message
+        except Exception:  # сетевой сбой на одном сайте не должен ронять весь сбор
+            logger.exception("повторное подключение сайта %s не удалось", site.domain)
+            site.status, site.status_note = "unavailable", "Не удалось проверить сайт — попробуем при следующем сборе."
+        await db.commit()
+
+
 async def process_scan_job(db: AsyncSession, job_id: uuid.UUID) -> ScanJob:
     """Idempotent: a job already 'done' or 'failed' is returned as-is, never reprocessed
     (ТЗ §9 — 'повторное выполнение задания не должно порождать новые редакционные
@@ -152,8 +171,26 @@ async def process_scan_job(db: AsyncSession, job_id: uuid.UUID) -> ScanJob:
     sites = (
         await db.scalars(select(SourceSite).where(SourceSite.flow_id == flow.id, SourceSite.active.is_(True)))
     ).all()
+    if job.provider_name == "html":
+        await _prepare_generic_sources(db, flow, list(sites))
     all_domains = [s.domain for s in sites]
     cleared_domains, blocked_domains = await _policy_cleared_domains(db, all_domains)
+    site_by_domain = {s.domain: s for s in sites}
+    if job.provider_name == "html":
+        not_ready = [d for d in cleared_domains if d not in HTML_SUPPORTED_DOMAINS and site_by_domain[d].status != "ready"]
+        for domain in not_ready:
+            await log_activity(
+                db,
+                workspace_id=flow.workspace_id,
+                action="source_unavailable",
+                details={"domain": domain, "flow_id": str(flow.id), "reason": site_by_domain[domain].status_note},
+            )
+        cleared_domains = [d for d in cleared_domains if d not in not_ready]
+    hints = {
+        s.domain: SourceHint(kind=s.kind, list_url=s.list_url)
+        for s in sites
+        if s.kind in ("feed", "sitemap", "html") and s.list_url and s.status == "ready"
+    }
 
     for domain in blocked_domains:
         await log_activity(
@@ -172,6 +209,7 @@ async def process_scan_job(db: AsyncSession, job_id: uuid.UUID) -> ScanJob:
             limit=flow.news_limit_per_run,
             keywords=list(flow.keywords or []),
             stop_words=list(flow.stop_words or []),
+            sources=hints,
         )
         llm_theme = theme_for_llm(flow)
 

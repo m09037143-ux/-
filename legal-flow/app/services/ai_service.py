@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.errors import AppError
 from app.models import Discovery, FactPassport, NewsFlow, NewsItem
 from app.models.enums import FactStatus
-from app.providers.html_source import SUPPORTED_DOMAINS as HTML_SUPPORTED_DOMAINS, fetch_article_text
+from app.providers.html_source import fetch_article_text
 from app.providers.yandex_gpt import RelevanceResult, YandexGPTPro51Provider
 from app.services import news_service
 from app.services.activity_service import log_activity
@@ -45,10 +45,11 @@ async def _fact_source_fragment(db: AsyncSession, news: NewsItem) -> str:
     При любой ошибке (сайт недоступен, блокировка, разметка изменилась) молча
     откатываемся на короткий фрагмент — генерация черновика не должна падать
     из-за того, что не получилось дочитать статью."""
-    if news.discovery_domain not in HTML_SUPPORTED_DOMAINS or news.discovery_id is None:
+    if news.discovery_id is None:
         return news.discovery_original_fragment
     discovery = await db.get(Discovery, news.discovery_id)
-    if discovery is None:
+    # Полный текст читаем только у материалов, найденных живым сбором (а не демо-фикстур).
+    if discovery is None or (discovery.metadata_json or {}).get("label") != "LIVE_LISTING":
         return news.discovery_original_fragment
     full_text = await fetch_article_text(discovery.normalized_url, domain=news.discovery_domain)
     if not full_text:

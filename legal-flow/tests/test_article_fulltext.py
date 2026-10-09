@@ -33,13 +33,25 @@ def test_extract_visible_text_skips_nav_and_script_keeps_paragraphs():
 
 @pytest.mark.asyncio
 async def test_fetch_article_text_returns_parsed_text(monkeypatch):
+    page = (
+        "<html><body><nav>Меню</nav><article>"
+        "<p>Первый абзац полного текста статьи, достаточно длинный, чтобы считаться содержательным абзацем.</p>"
+        "<p>Второй абзац полного текста статьи, тоже достаточно длинный для того, чтобы попасть в результат.</p>"
+        "</article><footer>Подвал сайта</footer></body></html>"
+    )
+
     async def fake_fetch(url, **kwargs):
-        return FetchResult(url, 200, "text/html; charset=utf-8", "<p>Полный текст статьи.</p>".encode("utf-8"))
+        return FetchResult(url, 200, "text/html; charset=utf-8", page.encode("utf-8"))
+
+    async def allow_all(url):
+        return True
 
     monkeypatch.setattr(html_source, "fetch_url", fake_fetch)
-    # домен без записи в ARTICLE_PARSERS — работает запасной extract_visible_text
+    monkeypatch.setattr(html_source, "robots_allows", allow_all)
+    # домен без записи в ARTICLE_PARSERS — работает универсальный разбор тела статьи
     text = await fetch_article_text("https://example.com/news/1/", domain="example.com")
-    assert text == "Полный текст статьи."
+    assert text is not None and text.startswith("Первый абзац") and "Второй абзац" in text
+    assert "Меню" not in text and "Подвал" not in text
 
 
 @pytest.mark.asyncio
@@ -52,7 +64,7 @@ async def test_fetch_article_text_returns_none_on_access_limited(monkeypatch):
     assert text is None
 
 
-async def _seed_news_item(authed, *, domain: str) -> tuple[uuid.UUID, uuid.UUID]:
+async def _seed_news_item(authed, *, domain: str, live: bool = True) -> tuple[uuid.UUID, uuid.UUID]:
     """Creates a flow + a NewsItem that looks exactly like one HtmlSourceProvider
     would have produced (discovery_domain + discovery_id -> Discovery.normalized_url),
     without going through a real scan_job — this test only cares about what
@@ -61,7 +73,7 @@ async def _seed_news_item(authed, *, domain: str) -> tuple[uuid.UUID, uuid.UUID]
     reg = await authed.post("/api/v1/auth/register", json={"name": "F", "email": email, "password": "correct-horse-battery"})
     workspace_id = uuid.UUID(reg.json()["memberships"][0]["workspace_id"])
     flow = await authed.post(
-        "/api/v1/flows", json={"name": "F", "theme": "Т", "domains": [domain], "news_limit_per_run": 1}
+        "/api/v1/flows", json={"name": "F", "theme": "Т", "domains": ["garant.ru"], "news_limit_per_run": 1}
     )
     flow_id = uuid.UUID(flow.json()["id"])
 
@@ -77,6 +89,7 @@ async def _seed_news_item(authed, *, domain: str) -> tuple[uuid.UUID, uuid.UUID]
             workspace_id=workspace_id, scan_job_id=job.id,
             normalized_url="https://www.garant.ru/news/1/", discovery_domain=domain,
             story_key="story-1", is_duplicate=False, decision_reason="new_story",
+            metadata_json={"label": "LIVE_LISTING" if live else "DEMO_FIXTURE"},
         )
         db.add(discovery)
         await db.flush()
@@ -126,14 +139,14 @@ async def test_fact_source_fragment_falls_back_when_fetch_fails(authed, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_fact_source_fragment_skips_fetch_for_unsupported_domain(authed, monkeypatch):
+async def test_fact_source_fragment_skips_fetch_for_demo_fixture_items(authed, monkeypatch):
     async def fake_fetch_article_text(url, *, domain):
-        raise AssertionError("should not be called for an unsupported domain")
+        raise AssertionError("should not be called for a DEMO_FIXTURE item")
 
     import app.services.ai_service as ai_service
     monkeypatch.setattr(ai_service, "fetch_article_text", fake_fetch_article_text)
 
-    news_id, _ = await _seed_news_item(authed, domain="example.com")
+    news_id, _ = await _seed_news_item(authed, domain="garant.ru", live=False)
     factory = get_session_factory()
     async with factory() as db:
         news = await db.get(NewsItem, news_id)

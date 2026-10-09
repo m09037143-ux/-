@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     rate_limit_login_per_15min: int = 10
     rate_limit_reset_per_hour: int = 5
     rate_limit_scan_jobs_per_hour: int = 20
+    rate_limit_add_source_per_hour: int = 30
 
     def yandex_model_uri_matches_folder(self) -> bool:
         if not self.yandex_folder_id or not self.yandex_model_uri:

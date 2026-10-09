@@ -184,15 +184,28 @@ async def test_scan_job_uses_html_provider_for_supported_domains(authed, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_scan_job_falls_back_to_fixture_for_unsupported_domain(authed, monkeypatch):
+async def test_scan_job_uses_html_provider_for_mixed_domains(authed, monkeypatch):
+    """Сайт без собственного парсера больше не отключает реальный сбор: провайдер "html"
+    обрабатывает и встроенные сайты, и добавленные пользователем (ленты/sitemap/эвристика)."""
     monkeypatch.setattr(get_settings(), "source_fixture_mode", False)
-    flow_id = await _create_flow(authed, "fixture-fallback", ["garant.ru", "example.com"])
-    resp = await authed.post(f"/api/v1/flows/{flow_id}/scan-jobs", headers={"Idempotency-Key": "fx-1"})
-    assert resp.json()["provider_name"] == "fixture"
-    # Left pending otherwise — run_next_pending_job() polls the whole table, not just
-    # this flow, so a leftover row here would steal a later test's job (see the same
-    # caveat documented in tests/test_worker_polling.py).
-    await run_next_pending_job()
+    pages = {
+        "https://www.garant.ru/news/": FetchResult(
+            "https://www.garant.ru/news/", 200, "text/html; charset=windows-1251", GARANT_HTML.encode("cp1251", errors="replace")
+        ),
+    }
+
+    async def allow_all(url):
+        return True
+
+    monkeypatch.setattr(html_source, "fetch_url", _fake_fetch(pages))
+    monkeypatch.setattr(html_source, "robots_allows", allow_all)
+    flow_id = await _create_flow(authed, "html-mixed", ["garant.ru", "example.com"])
+    resp = await authed.post(f"/api/v1/flows/{flow_id}/scan-jobs", headers={"Idempotency-Key": "mixed-1"})
+    assert resp.json()["provider_name"] == "html"
+    job = await run_next_pending_job()
+    assert job.status.value == "done"
+    # example.com без политики источника (её заводит настоящее подключение) — пропущен, garant.ru собран
+    assert len(job.created_news_ids) == 3  # лимит потока — 3 материала на сайт
 
 
 async def test_discover_includes_consultant_via_site_registry(monkeypatch):

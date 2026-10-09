@@ -32,6 +32,7 @@ class CreateFlowRequest(BaseModel):
     domains: list[str] = Field(default_factory=list, max_length=50)
     keywords: list[str] = Field(default_factory=list, max_length=200)
     stop_words: list[str] = Field(default_factory=list, max_length=200)
+    rights_confirmed: bool = False
 
     @field_validator("keywords", "stop_words")
     @classmethod
@@ -59,6 +60,9 @@ class SourceSiteOut(BaseModel):
     domain: str
     active: bool
     html_supported: bool = False
+    kind: str | None = None
+    status: str = "ready"
+    status_note: str = ""
 
 
 class FlowOut(BaseModel):
@@ -76,11 +80,13 @@ class FlowOut(BaseModel):
 
 class AddSourceRequest(BaseModel):
     domain: str
+    rights_confirmed: bool = False
 
 
 class UpdateSourceRequest(BaseModel):
     domain: str | None = None
     active: bool | None = None
+    rights_confirmed: bool = False
 
 
 class ScanJobOut(BaseModel):

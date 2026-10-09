@@ -47,19 +47,32 @@ async def test_sources_report_html_support_and_flow_real_collection_flag(authed,
     assert all(s["html_supported"] for s in flow.json()["sources"])
 
 
-async def test_mixed_domains_disable_real_collection_for_whole_flow(authed, monkeypatch):
+async def test_site_without_collection_method_is_reported_unavailable(authed, monkeypatch):
+    """Сайт, для которого не нашли ленту/список, виден в потоке со статусом unavailable и
+    причиной, но не отключает реальный сбор для остальных сайтов."""
     monkeypatch.setattr(get_settings(), "source_fixture_mode", False)
+    from app.services import flow_service
+    from app.services.source_onboarding import OnboardResult
+
+    async def fake_onboard(db, *, domain, confirmed, confirmed_by):
+        if domain == "garant.ru":
+            return OnboardResult("builtin", "https://www.garant.ru/news/", "ready", robots_checked=True)
+        return OnboardResult(None, None, "unavailable", "Не нашли ленту новостей", robots_checked=True)
+
+    monkeypatch.setattr(flow_service, "onboard_source", fake_onboard)
     email = unique_email("source-mixed")
     await authed.post("/api/v1/auth/register", json={"name": "S", "email": email, "password": "correct-horse-battery"})
-    # example-legal-news.ru stands in for "a domain HtmlSourceProvider doesn't support
-    # yet" — any domain not in html_source.SUPPORTED_DOMAINS works for this test.
     flow = await authed.post(
         "/api/v1/flows",
-        json={"name": "F", "theme": "Т", "domains": ["garant.ru", "example-legal-news.ru"], "news_limit_per_run": 1},
+        json={"name": "F", "theme": "Т", "domains": ["garant.ru", "example-legal-news.ru"], "news_limit_per_run": 1, "rights_confirmed": True},
     )
-    assert flow.json()["real_collection_enabled"] is False
-    by_domain = {s["domain"]: s["html_supported"] for s in flow.json()["sources"]}
-    assert by_domain == {"garant.ru": True, "example-legal-news.ru": False}
+    assert flow.status_code == 201, flow.text
+    assert flow.json()["real_collection_enabled"] is True
+    by_domain = {s["domain"]: s for s in flow.json()["sources"]}
+    assert by_domain["garant.ru"]["html_supported"] is True and by_domain["garant.ru"]["kind"] == "builtin"
+    assert by_domain["example-legal-news.ru"]["html_supported"] is False
+    assert by_domain["example-legal-news.ru"]["status"] == "unavailable"
+    assert by_domain["example-legal-news.ru"]["status_note"] == "Не нашли ленту новостей"
 
 
 async def test_real_collection_disabled_when_source_fixture_mode_is_default_on(authed):

@@ -8,18 +8,23 @@ from urllib.parse import urljoin, urlsplit
 
 from app.config import get_settings
 from app.providers.base import CandidateItem
+from app.providers.feed_parser import parse_feed, parse_news_sitemap
+from app.providers.generic_html import extract_main_text, parse_generic_listing, same_site, strip_tracking_params
+from app.providers.listing_types import ParsedListItem  # noqa: F401  (реэкспорт для старых импортов)
 from app.providers.http_fetch import AccessLimitedError, fetch_url
+from app.providers.robots import robots_allows
 from app.providers.ssrf import SSRFBlockedError
 
 logger = logging.getLogger("app.providers.html_source")
 
 
 @dataclass
-class ParsedListItem:
-    url: str
-    title: str
-    lead: str = ""
-    published: str = ""
+class SourceHint:
+    """Что известно о сайте без собственного парсера (хранится в source_sites):
+    kind — feed (RSS/Atom) | sitemap (новостной sitemap) | html (список статей по эвристике)."""
+
+    kind: str
+    list_url: str
 
 
 class _ListingParser(HTMLParser):
@@ -242,7 +247,10 @@ def build_candidates(
     limit: int,
     keywords: list[str] | None = None,
     stop_words: list[str] | None = None,
+    generic: bool = False,
 ) -> list[CandidateItem]:
+    """generic=True — сайт без собственного парсера (RSS/sitemap/эвристика): адрес сохраняется
+    вместе с query (без utm-меток), ссылки на чужие сайты отбрасываются, ключ сюжета — хеш адреса."""
     candidates: list[CandidateItem] = []
     for item in items:
         if len(candidates) >= limit:
@@ -250,9 +258,16 @@ def build_candidates(
         if not matches_flow(item.title, item.lead, theme, keywords, stop_words):
             continue
         parts = urlsplit(item.url)
-        url = f"{parts.scheme}://{parts.netloc}{parts.path}"
-        id_match = _ID_RE.search(parts.path)
-        story_key = f"html:{domain}:{id_match.group(1) if id_match else parts.path}"
+        if generic:
+            if parts.scheme not in ("http", "https") or not same_site(parts.netloc, domain):
+                continue
+            query = strip_tracking_params(parts.query)
+            url = f"https://{parts.netloc}{parts.path}" + (f"?{query}" if query else "")
+            story_key = f"html:{domain}:{hashlib.sha1(url.encode('utf-8')).hexdigest()[:16]}"
+        else:
+            url = f"{parts.scheme}://{parts.netloc}{parts.path}"
+            id_match = _ID_RE.search(parts.path)
+            story_key = f"html:{domain}:{id_match.group(1) if id_match else parts.path}"
         fragment = item.lead or item.title
         candidates.append(
             CandidateItem(
@@ -286,12 +301,18 @@ class HtmlSourceProvider:
         limit: int,
         keywords: list[str] | None = None,
         stop_words: list[str] | None = None,
+        sources: dict[str, SourceHint] | None = None,
     ) -> list[CandidateItem]:
         settings = get_settings()
         found: list[CandidateItem] = []
         for domain in domains:
             site = SITES.get(domain)
             if site is None:
+                found.extend(
+                    await self._discover_generic(
+                        domain, (sources or {}).get(domain), theme, limit, keywords, stop_words
+                    )
+                )
                 continue
             list_url, parse = site
             try:
@@ -312,6 +333,44 @@ class HtmlSourceProvider:
                 logger.warning("html source %s: no news items parsed — markup may have changed", domain)
             found.extend(build_candidates(domain, items, theme, limit, keywords, stop_words))
         return found
+
+
+    async def _discover_generic(
+        self, domain: str, hint: "SourceHint | None", theme: str, limit: int, keywords, stop_words
+    ) -> list[CandidateItem]:
+        """Сайт, добавленный пользователем: лента RSS/Atom, новостной sitemap или список
+        статей по эвристике (вид определён при добавлении сайта). robots.txt проверяется
+        при каждом сборе; при блокировке/ошибке сайт пропускается без обхода."""
+        if hint is None or hint.kind not in ("feed", "sitemap", "html"):
+            logger.warning("html source %s skipped: для сайта не определён способ сбора", domain)
+            return []
+        if not await robots_allows(hint.list_url):
+            logger.warning("html source %s skipped: robots.txt запрещает %s", domain, hint.list_url)
+            return []
+        settings = get_settings()
+        try:
+            result = await fetch_url(
+                hint.list_url,
+                timeout_seconds=settings.fetch_timeout_seconds,
+                max_bytes=settings.fetch_max_bytes,
+                max_redirects=settings.fetch_max_redirects,
+            )
+        except (AccessLimitedError, SSRFBlockedError) as exc:
+            logger.warning("html source %s skipped: %s", domain, exc)
+            return []
+        if result.status_code != 200:
+            logger.warning("html source %s skipped: HTTP %s", domain, result.status_code)
+            return []
+        text = decode_body(result.body, result.content_type)
+        if hint.kind == "feed":
+            items = parse_feed(text, result.final_url)
+        elif hint.kind == "sitemap":
+            items, _children = parse_news_sitemap(text, result.final_url)
+        else:
+            items = parse_generic_listing(text, result.final_url, domain)
+        if not items:
+            logger.warning("html source %s: no items parsed from %s (%s) — site may have changed", domain, hint.list_url, hint.kind)
+        return build_candidates(domain, items, theme, limit, keywords, stop_words, generic=True)
 
 
 class _ArticleTextParser(HTMLParser):
@@ -487,7 +546,8 @@ _parse_pravo_article = _article_parser(_PravoArticleParser)
 _parse_consultant_article = _article_parser(_ConsultantArticleParser)
 
 # Точный разбор тела статьи (без меню/подвала/рекламы) по доменам. Домен без записи
-# здесь получает extract_visible_text() как грубый запасной вариант (см. его docstring).
+# здесь получает универсальный extract_main_text() (generic_html.py): контейнер с самым
+# большим объёмом абзацев; если такого нет — пустая строка, и вызывающий код берёт анонс.
 ARTICLE_PARSERS: dict[str, Callable[[str], str]] = {
     "garant.ru": _parse_garant_article,
     "pravo.ru": _parse_pravo_article,
@@ -506,6 +566,11 @@ async def fetch_article_text(url: str, *, domain: str) -> str | None:
     вызывающий код обязан в этом случае откатиться на уже сохранённый короткий
     фрагмент (discovery_original_fragment), а не падать."""
     settings = get_settings()
+    if domain not in ARTICLE_PARSERS:
+        # сайт без собственного парсера: только та же площадка и только если robots.txt разрешает
+        if not same_site(urlsplit(url).netloc, domain) or not await robots_allows(url):
+            logger.warning("article fetch %s skipped: другой сайт или запрет robots.txt", url)
+            return None
     try:
         result = await fetch_url(
             url,
@@ -519,7 +584,7 @@ async def fetch_article_text(url: str, *, domain: str) -> str | None:
     if result.status_code != 200:
         logger.warning("article fetch %s skipped: HTTP %s", url, result.status_code)
         return None
-    parse = ARTICLE_PARSERS.get(domain, extract_visible_text)
+    parse = ARTICLE_PARSERS.get(domain, extract_main_text)
     text = parse(decode_body(result.body, result.content_type)).strip()
     if not text and domain in ARTICLE_PARSERS:
         logger.warning("article parse %s: empty text — markup of %s may have changed", url, domain)

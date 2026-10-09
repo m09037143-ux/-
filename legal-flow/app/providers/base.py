@@ -28,5 +28,6 @@ class SourceProvider(Protocol):
         limit: int,
         keywords: list[str] | None = None,
         stop_words: list[str] | None = None,
+        sources: dict | None = None,
     ) -> list[CandidateItem]:
         ...

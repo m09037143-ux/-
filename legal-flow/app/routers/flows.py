@@ -44,16 +44,25 @@ async def _get_owned_flow(db: AsyncSession, membership: Membership, flow_id: uui
     return flow
 
 
+_GENERIC_KINDS = ("feed", "sitemap", "html")
+
+
+def _site_out(s: SourceSite) -> SourceSiteOut:
+    collectable = s.domain in HTML_SUPPORTED_DOMAINS or (s.kind in _GENERIC_KINDS and s.status == "ready")
+    return SourceSiteOut(
+        id=s.id, domain=s.domain, active=s.active, html_supported=collectable,
+        kind=s.kind or ("builtin" if s.domain in HTML_SUPPORTED_DOMAINS else None),
+        status=s.status, status_note=s.status_note,
+    )
+
+
 def _flow_out(flow: NewsFlow, sources: list[SourceSite]) -> FlowOut:
     # Тот же критерий, что и scan_service.provider_name_for_flow — держать в одном
     # месте нельзя, та функция асинхронная и берёт домены из БД по flow_id, а не из
     # уже загруженного списка sources; при изменении правила менять оба места.
-    active_domains = [s.domain for s in sources if s.active]
-    real_collection_enabled = (
-        not get_settings().source_fixture_mode
-        and bool(active_domains)
-        and all(d in HTML_SUPPORTED_DOMAINS for d in active_domains)
-    )
+    # Тот же критерий, что scan_service.provider_name_for_flow: реальный сбор включён, если
+    # SOURCE_FIXTURE_MODE выключен и есть хотя бы один активный сайт.
+    real_collection_enabled = not get_settings().source_fixture_mode and any(s.active for s in sources)
     return FlowOut(
         id=flow.id,
         name=flow.name,
@@ -63,10 +72,7 @@ def _flow_out(flow: NewsFlow, sources: list[SourceSite]) -> FlowOut:
         news_limit_per_run=flow.news_limit_per_run,
         keywords=list(flow.keywords or []),
         stop_words=list(flow.stop_words or []),
-        sources=[
-            SourceSiteOut(id=s.id, domain=s.domain, active=s.active, html_supported=s.domain in HTML_SUPPORTED_DOMAINS)
-            for s in sources
-        ],
+        sources=[_site_out(s) for s in sources],
         real_collection_enabled=real_collection_enabled,
     )
 
@@ -88,6 +94,7 @@ async def create_flow(
     _access: Membership = Depends(require_active_access),
     db: AsyncSession = Depends(get_db),
 ):
+    await enforce_rate_limit("add_source", str(membership.workspace_id), get_settings().rate_limit_add_source_per_hour, 3600)
     flow = await flow_service.create_flow(
         db,
         workspace_id=membership.workspace_id,
@@ -99,6 +106,8 @@ async def create_flow(
         domains=payload.domains,
         keywords=payload.keywords,
         stop_words=payload.stop_words,
+        rights_confirmed=payload.rights_confirmed,
+        confirmed_by=str(membership.user_id),
     )
     sources = (await db.scalars(select(SourceSite).where(SourceSite.flow_id == flow.id))).all()
     return _flow_out(flow, sources)
@@ -131,8 +140,12 @@ async def add_source(
     db: AsyncSession = Depends(get_db),
 ):
     flow = await _get_owned_flow(db, membership, flow_id)
-    site = await flow_service.add_source(db, flow=flow, workspace_id=membership.workspace_id, domain=payload.domain)
-    return SourceSiteOut(id=site.id, domain=site.domain, active=site.active, html_supported=site.domain in HTML_SUPPORTED_DOMAINS)
+    await enforce_rate_limit("add_source", str(membership.workspace_id), get_settings().rate_limit_add_source_per_hour, 3600)
+    site = await flow_service.add_source(
+        db, flow=flow, workspace_id=membership.workspace_id, domain=payload.domain,
+        rights_confirmed=payload.rights_confirmed, confirmed_by=str(membership.user_id),
+    )
+    return _site_out(site)
 
 
 @router.patch("/flows/{flow_id}/sources/{source_id}", response_model=SourceSiteOut, dependencies=[Depends(require_csrf)])
@@ -149,11 +162,15 @@ async def update_source(
     if site is None or site.flow_id != flow.id:
         raise AppError("VALIDATION_ERROR", "Источник не найден.")
     if payload.domain is not None:
-        site.domain = flow_service.validate_domain(payload.domain)
+        await enforce_rate_limit("add_source", str(membership.workspace_id), get_settings().rate_limit_add_source_per_hour, 3600)
+        await flow_service.change_source_domain(
+            db, site=site, domain=payload.domain,
+            rights_confirmed=payload.rights_confirmed, confirmed_by=str(membership.user_id),
+        )
     if payload.active is not None:
         site.active = payload.active
     await db.commit()
-    return SourceSiteOut(id=site.id, domain=site.domain, active=site.active, html_supported=site.domain in HTML_SUPPORTED_DOMAINS)
+    return _site_out(site)
 
 
 @router.delete("/flows/{flow_id}/sources/{source_id}", status_code=204, dependencies=[Depends(require_csrf)])

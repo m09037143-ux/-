@@ -64,6 +64,15 @@ class SourceSite(Base, UUIDPk, TimestampMixin):
     )
     domain: Mapped[str] = mapped_column(String(255), nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Как собирать с сайта: builtin (свой парсер), feed (RSS/Atom), sitemap (новостной sitemap),
+    # html (список статей по эвристике). None — ещё не определено (определится при сборе).
+    kind: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    list_url: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    # ready — можно собирать; unavailable — не нашли ленту/сайт не отвечает (причина в status_note)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ready", server_default="ready")
+    status_note: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    # id пользователя, подтвердившего право использовать материалы сайта (нужно для повторного подключения при сборе)
+    rights_confirmed_by: Mapped[str] = mapped_column(String(200), nullable=False, default="", server_default="")
 
 
 class ScanJob(Base, UUIDPk, TimestampMixin):

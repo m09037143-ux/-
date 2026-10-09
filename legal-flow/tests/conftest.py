@@ -140,3 +140,22 @@ async def run_next_pending_job():
         job_id = await fetch_next_pending_job_id(db)
         assert job_id is not None, "expected a scan job to be pending"
         return await process_scan_job(db, job_id)
+
+
+@pytest.fixture(autouse=True)
+def _no_network_source_onboarding(monkeypatch):
+    """Подключение сайта (robots.txt, поиск ленты) ходит в сеть — в тестах подменяем его:
+    встроенные сайты — builtin, любой другой домен — «лента найдена». Саму логику подключения
+    проверяют tests/test_source_onboarding.py (там source_onboarding.onboard_source вызывается
+    напрямую, а сеть подменена на уровне fetch_url)."""
+    from app.providers.html_source import SITES
+    from app.services import flow_service, scan_service
+    from app.services.source_onboarding import OnboardResult
+
+    async def fake_onboard(db, *, domain, confirmed, confirmed_by):
+        if domain in SITES:
+            return OnboardResult("builtin", SITES[domain][0], "ready", robots_checked=True)
+        return OnboardResult("feed", f"https://{domain}/rss", "ready", robots_checked=True)
+
+    monkeypatch.setattr(flow_service, "onboard_source", fake_onboard)
+    monkeypatch.setattr(scan_service, "onboard_source", fake_onboard)

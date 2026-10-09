@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Новости</title>
+  <entry>
+    <title>Верховный суд разъяснил порядок взыскания убытков</title>
+    <link rel="alternate" href="https://atom.example.ru/news/vs-razyasnil-ubytki"/>
+    <link rel="self" href="https://atom.example.ru/atom/1"/>
+    <summary>Обзор практики по взысканию убытков с директоров.</summary>
+    <published>2026-10-09T08:30:00Z</published>
+  </entry>
+</feed>
