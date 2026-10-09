@@ -5,8 +5,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import AppError
-from app.models import Discovery, FactPassport, NewsFlow, NewsItem
-from app.models.enums import FactStatus
+from app.models import Discovery, FactPassport, Membership, NewsFlow, NewsItem, ScanJob
+from app.models.enums import FactStatus, NewsStatus, Role
 from app.providers.html_source import fetch_article_text
 from app.providers.yandex_gpt import RelevanceResult, YandexGPTPro51Provider
 from app.services import news_service
@@ -109,3 +109,55 @@ async def run_critique(db: AsyncSession, *, news: NewsItem) -> dict:
         details={"news_id": str(news.id), **result.model_dump()},
     )
     return result.model_dump()
+
+
+_AUTO_DRAFT_MAX_PER_JOB = 10
+_AUTO_DRAFT_STOP_CODES = ("LLM_BUDGET_EXCEEDED", "LLM_NOT_CONFIGURED")
+
+
+async def auto_generate_drafts(db: AsyncSession, job: ScanJob) -> dict:
+    """После сбора готовит паспорт фактов и черновик для найденных материалов (флаг потока
+    auto_draft). Это ровно та же генерация, что и по кнопке: результат — непроверенный
+    черновик, человек-редактор всё равно проверяет и утверждает; публикации автоматом нет.
+    Автором правки записывается владелец рабочего пространства. Дневной бюджет токенов
+    и отсутствие настройки модели останавливают пакет, отказ модели по одному материалу —
+    нет (он помечается в журнале, остальные продолжаются)."""
+    summary = {"generated": 0, "failed": 0, "skipped": 0, "stopped": None}
+    flow = await db.get(NewsFlow, job.flow_id)
+    if flow is None or not flow.auto_draft or not job.created_news_ids:
+        return summary
+    owner_id = await db.scalar(
+        select(Membership.user_id)
+        .where(Membership.workspace_id == flow.workspace_id, Membership.role == Role.workspace_owner)
+        .order_by(Membership.created_at)
+        .limit(1)
+    )
+    if owner_id is None:
+        return summary
+
+    for news_id in job.created_news_ids[:_AUTO_DRAFT_MAX_PER_JOB]:
+        news = await db.get(NewsItem, uuid.UUID(news_id))
+        if news is None or news.workspace_id != flow.workspace_id or news.status != NewsStatus.DISCOVERED or news.text:
+            summary["skipped"] += 1
+            continue
+        try:
+            await generate_ai_draft(db, news=news, expected_version=news.version, user_id=owner_id)
+            summary["generated"] += 1
+        except AppError as exc:
+            if exc.code in _AUTO_DRAFT_STOP_CODES:
+                summary["stopped"] = exc.code
+                break
+            summary["failed"] += 1
+            await log_activity(
+                db, workspace_id=flow.workspace_id, action="auto_draft_failed",
+                details={"news_id": news_id, "reason": exc.message[:300]},
+            )
+        except Exception:  # noqa: BLE001 -- один сбой не должен срывать остальные материалы
+            logger.exception("автоматический черновик для %s не удался", news_id)
+            await db.rollback()
+            summary["failed"] += 1
+    await log_activity(
+        db, workspace_id=flow.workspace_id, action="auto_drafts_completed",
+        details={"job_id": str(job.id), "flow_id": str(flow.id), **summary},
+    )
+    return summary

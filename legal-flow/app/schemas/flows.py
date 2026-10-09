@@ -33,6 +33,7 @@ class CreateFlowRequest(BaseModel):
     keywords: list[str] = Field(default_factory=list, max_length=200)
     stop_words: list[str] = Field(default_factory=list, max_length=200)
     rights_confirmed: bool = False
+    auto_draft: bool = True
 
     @field_validator("keywords", "stop_words")
     @classmethod
@@ -48,6 +49,7 @@ class UpdateFlowRequest(BaseModel):
     news_limit_per_run: int | None = Field(default=None, ge=1, le=100)
     keywords: list[str] | None = Field(default=None, max_length=200)
     stop_words: list[str] | None = Field(default=None, max_length=200)
+    auto_draft: bool | None = None
 
     @field_validator("keywords", "stop_words")
     @classmethod
@@ -74,6 +76,7 @@ class FlowOut(BaseModel):
     news_limit_per_run: int
     keywords: list[str] = Field(default_factory=list)
     stop_words: list[str] = Field(default_factory=list)
+    auto_draft: bool = True
     sources: list[SourceSiteOut] = Field(default_factory=list)
     real_collection_enabled: bool = False
 

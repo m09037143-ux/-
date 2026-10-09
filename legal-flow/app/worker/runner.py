@@ -23,6 +23,7 @@ from app.config import get_settings
 from app.db import get_session_factory
 from app.models import ScanJob
 from app.models.enums import ScanJobStatus
+from app.services.ai_service import auto_generate_drafts
 from app.services.scan_service import enqueue_due_scheduled_scans, process_scan_job
 
 logger = logging.getLogger("app.worker")
@@ -73,6 +74,12 @@ async def run_forever() -> None:
                             "scan_job %s обработан: provider=%s, новых материалов=%d",
                             job_id, job.provider_name, len(job.created_news_ids),
                         )
+                        if job.status == ScanJobStatus.done:
+                            try:
+                                summary = await auto_generate_drafts(db, job)
+                                logger.info("автоматические черновики по scan_job %s: %s", job_id, summary)
+                            except Exception:  # noqa: BLE001 -- сбор уже завершён, черновики — отдельный шаг
+                                logger.exception("Ошибка автоматических черновиков по scan_job %s", job_id)
                     except Exception:  # noqa: BLE001 -- worker must keep running past one bad job
                         logger.exception("Ошибка обработки scan_job %s", job_id)
         except Exception:  # noqa: BLE001 -- a transient DB hiccup must not kill the worker

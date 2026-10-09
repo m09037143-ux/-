@@ -51,6 +51,8 @@ class NewsFlow(Base, UUIDPk, TimestampMixin):
     news_limit_per_run: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     last_scan_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Ключевые слова: хотя бы одно должно встретиться в заголовке/анонсе. Стоп-слова: любое — исключает материал.
+    # После сбора автоматически готовить паспорт фактов и черновик (публикации автоматом нет никогда)
+    auto_draft: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
     keywords: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list, server_default=text("'{}'"))
     stop_words: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list, server_default=text("'{}'"))
 

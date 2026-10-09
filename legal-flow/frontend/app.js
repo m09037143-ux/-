@@ -452,7 +452,7 @@
   function settingsPage() {
     return page('Настройки', '<div class="tabs">' + ['Профиль', 'Поток', 'Безопасность', 'Опасная зона'].map(function (v) { return '<button data-settings="' + v + '" class="' + (v === state.settingsTab ? 'active' : '') + '">' + v + '</button>'; }).join('') + '</div><div class="card">' + (
       state.settingsTab === 'Профиль' ? field('profile-name', 'Имя', 'text', state.user ? state.user.name : '') + button('Сохранить', 'saveProfile')
-      : state.settingsTab === 'Поток' ? (state.flow ? field('flow-name', 'Название потока', 'text', state.flow.name) + textareaField('flow-keywords', 'Ключевые слова', (state.flow.keywords || []).join('\n'), 'Хотя бы одно должно встретиться в материале. По одному на строке или через запятую.') + textareaField('flow-stopwords', 'Стоп-слова', (state.flow.stop_words || []).join('\n'), 'Материал с любым из этих слов пропускается.') + button('Сохранить', 'saveFlow') : '<p class="notice">Сначала создайте поток.</p>')
+      : state.settingsTab === 'Поток' ? (state.flow ? field('flow-name', 'Название потока', 'text', state.flow.name) + textareaField('flow-keywords', 'Ключевые слова', (state.flow.keywords || []).join('\n'), 'Хотя бы одно должно встретиться в материале. По одному на строке или через запятую.') + textareaField('flow-stopwords', 'Стоп-слова', (state.flow.stop_words || []).join('\n'), 'Материал с любым из этих слов пропускается.') + '<label class="small" style="display:flex;gap:9px;margin:12px 0;align-items:flex-start"><input type="checkbox" id="flow-autodraft" style="margin-top:3px" ' + (state.flow.auto_draft !== false ? 'checked' : '') + '><span>Автоматически готовить паспорт фактов и черновик для найденных материалов. Публикации автоматом нет — каждый материал проверяет и утверждает редактор.</span></label>' + button('Сохранить', 'saveFlow') : '<p class="notice">Сначала создайте поток.</p>')
       : state.settingsTab === 'Безопасность' ? '<p>Пароли хранятся как Argon2id-хеш. Сессии — HttpOnly-cookie с CSRF-защитой.</p>'
       : '<p class="notice warning">Удаление демонстрационных данных для реального рабочего пространства не предусмотрено — это необратимо затронуло бы настоящие материалы.</p>'
     ) + '</div>');
@@ -855,7 +855,7 @@
       if (a === 'saveFlow') {
         if (!gate()) return;
         var fn = value('flow-name'); if (!fn) return toast('Заполните поле', true);
-        state.flow = await api('/api/v1/flows/' + state.flow.id, { method: 'PATCH', body: { name: fn, keywords: splitWords(value('flow-keywords')), stop_words: splitWords(value('flow-stopwords')) } });
+        state.flow = await api('/api/v1/flows/' + state.flow.id, { method: 'PATCH', body: { name: fn, keywords: splitWords(value('flow-keywords')), stop_words: splitWords(value('flow-stopwords')), auto_draft: !!(document.getElementById('flow-autodraft') || {}).checked } });
         toast('Настройки потока сохранены'); return render();
       }
     } catch (err) {
