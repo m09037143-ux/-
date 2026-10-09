@@ -108,6 +108,9 @@
     setupStep: 0,
     setupSites: 'garant.ru\npravo.ru',
     setupTheme: 'Банкротство и корпоративные споры',
+    setupKeywords: '',
+    setupStopWords: '',
+    setupSyncedFlowId: null,
     setupPeriod: 'По рабочим дням',
     setupTime: '09:00',
     setupLimit: 3,
@@ -165,6 +168,13 @@
   }
   function field(id, label, type, initial) {
     return '<div class="field"><label for="' + id + '">' + label + '</label><input type="' + (type || 'text') + '" id="' + id + '" value="' + esc(initial || '') + '"><span class="error" id="err-' + id + '"></span></div>';
+  }
+
+  function textareaField(id, label, initial, hint) {
+    return '<div class="field"><label for="' + id + '">' + label + '</label><textarea id="' + id + '" rows="3">' + esc(initial || '') + '</textarea>' + (hint ? '<p class="small">' + hint + '</p>' : '') + '<span class="error" id="err-' + id + '"></span></div>';
+  }
+  function splitWords(str) {
+    return String(str || '').split(/[\n,;]+/).map(function (w) { return w.trim(); }).filter(Boolean);
   }
 
   var THEME_CATEGORIES = [
@@ -323,6 +333,13 @@
 
   function setupPage() {
     var i = state.setupStep, hasFlow = !!state.flow;
+    if (hasFlow && state.setupSyncedFlowId !== state.flow.id) {
+      state.setupSyncedFlowId = state.flow.id;
+      state.setupTheme = state.flow.theme;
+      state.setupKeywords = (state.flow.keywords || []).join('\n');
+      state.setupStopWords = (state.flow.stop_words || []).join('\n');
+      state.setupPeriod = state.flow.schedule_period; state.setupTime = state.flow.schedule_time; state.setupLimit = state.flow.news_limit_per_run;
+    }
     var allowedPeriods = allowedSchedulePeriods();
     if (allowedPeriods.indexOf(state.setupPeriod) === -1) state.setupPeriod = allowedPeriods[0];
     var body;
@@ -335,11 +352,13 @@
         + '<select id="setup-category"><option value="">— выбрать из списка —</option>'
         + THEME_CATEGORIES.map(function (c) { return '<option ' + (c === state.setupTheme ? 'selected' : '') + '>' + esc(c) + '</option>'; }).join('')
         + '</select></div>'
-        + field('setup-theme', 'Тема потока (можно уточнить своими ключевыми словами)', 'text', state.setupTheme);
+        + field('setup-theme', 'Тема потока', 'text', state.setupTheme)
+        + textareaField('setup-keywords', 'Ключевые слова (необязательно)', state.setupKeywords, 'По одному на строке или через запятую. В материале должно встретиться хотя бы одно слово. Работает по основе слова: «банкротство» найдёт и «банкротстве».')
+        + textareaField('setup-stopwords', 'Стоп-слова (необязательно)', state.setupStopWords, 'Материал, где встретится любое из этих слов, будет пропущен.');
     } else if (i === 2) {
       body = '<h3>Расписание</h3><div class="field"><label for="setup-period">Периодичность</label><select id="setup-period">' + allowedPeriods.map(function (v) { return '<option ' + (v === state.setupPeriod ? 'selected' : '') + '>' + v + '</option>'; }).join('') + '</select>' + (allowedPeriods.length < 4 ? '<p class="small">Текущий тариф допускает только ручной или ежедневный запуск.</p>' : '') + '</div>' + field('setup-time', 'Время, Москва UTC+3', 'time', state.setupTime);
     } else {
-      body = '<h3>Количество новостей за запуск</h3>' + [1, 3, 5, 10].map(function (v) { return '<label style="display:inline-block;margin:9px"><input type="radio" name="limit" value="' + v + '" ' + (state.setupLimit === v ? 'checked' : '') + '> ' + v + '</label>'; }).join('') + '<p class="notice">' + esc(state.setupTheme) + ' · ' + esc(state.setupPeriod) + ', ' + esc(state.setupTime) + '</p>';
+      body = '<h3>Количество новостей за запуск</h3>' + [1, 3, 5, 10].map(function (v) { return '<label style="display:inline-block;margin:9px"><input type="radio" name="limit" value="' + v + '" ' + (state.setupLimit === v ? 'checked' : '') + '> ' + v + '</label>'; }).join('') + '<p class="notice">' + esc(state.setupTheme) + ' · ' + esc(state.setupPeriod) + ', ' + esc(state.setupTime) + (splitWords(state.setupKeywords).length ? '<br>Ключевые слова: ' + esc(splitWords(state.setupKeywords).join(', ')) : '') + (splitWords(state.setupStopWords).length ? '<br>Стоп-слова: ' + esc(splitWords(state.setupStopWords).join(', ')) : '') + '</p>';
     }
     return page(hasFlow ? 'Настроить поток' : 'Создать поток', '<p class="tag">Шаг ' + (i + 1) + ' из 4</p><div class="card" style="max-width:740px">' + body + '<div class="row" style="margin-top:22px">' + (i ? button('Назад', 'setupBack') : '<span></span>') + button(i === 3 ? 'Сохранить' : 'Продолжить', i === 3 ? 'setupSave' : 'setupNext', 'primary') + '</div></div>', 'Лимиты (число потоков/сайтов/новостей) проверяет сервер по вашему тарифу.');
   }
@@ -433,7 +452,7 @@
   function settingsPage() {
     return page('Настройки', '<div class="tabs">' + ['Профиль', 'Поток', 'Безопасность', 'Опасная зона'].map(function (v) { return '<button data-settings="' + v + '" class="' + (v === state.settingsTab ? 'active' : '') + '">' + v + '</button>'; }).join('') + '</div><div class="card">' + (
       state.settingsTab === 'Профиль' ? field('profile-name', 'Имя', 'text', state.user ? state.user.name : '') + button('Сохранить', 'saveProfile')
-      : state.settingsTab === 'Поток' ? (state.flow ? field('flow-name', 'Название потока', 'text', state.flow.name) + button('Сохранить', 'saveFlow') : '<p class="notice">Сначала создайте поток.</p>')
+      : state.settingsTab === 'Поток' ? (state.flow ? field('flow-name', 'Название потока', 'text', state.flow.name) + textareaField('flow-keywords', 'Ключевые слова', (state.flow.keywords || []).join('\n'), 'Хотя бы одно должно встретиться в материале. По одному на строке или через запятую.') + textareaField('flow-stopwords', 'Стоп-слова', (state.flow.stop_words || []).join('\n'), 'Материал с любым из этих слов пропускается.') + button('Сохранить', 'saveFlow') : '<p class="notice">Сначала создайте поток.</p>')
       : state.settingsTab === 'Безопасность' ? '<p>Пароли хранятся как Argon2id-хеш. Сессии — HttpOnly-cookie с CSRF-защитой.</p>'
       : '<p class="notice warning">Удаление демонстрационных данных для реального рабочего пространства не предусмотрено — это необратимо затронуло бы настоящие материалы.</p>'
     ) + '</div>');
@@ -704,6 +723,7 @@
           state.setupSites = sites;
         } else if (state.setupStep === 1) {
           state.setupTheme = value('setup-theme');
+          state.setupKeywords = value('setup-keywords'); state.setupStopWords = value('setup-stopwords');
           if (!state.setupTheme) { document.getElementById('err-setup-theme').textContent = 'Укажите тему'; return; }
         } else if (state.setupStep === 2) {
           state.setupPeriod = value('setup-period'); state.setupTime = value('setup-time') || '09:00';
@@ -713,9 +733,9 @@
         }
         if (a === 'setupSave') {
           if (!state.flow) {
-            state.flow = await api('/api/v1/flows', { method: 'POST', body: { name: state.setupTheme, theme: state.setupTheme, schedule_period: state.setupPeriod, schedule_time: state.setupTime, news_limit_per_run: state.setupLimit, domains: state.setupSites.split(/\n/).map(function (s) { return s.trim(); }).filter(Boolean) } });
+            state.flow = await api('/api/v1/flows', { method: 'POST', body: { name: state.setupTheme, theme: state.setupTheme, schedule_period: state.setupPeriod, schedule_time: state.setupTime, news_limit_per_run: state.setupLimit, keywords: splitWords(state.setupKeywords), stop_words: splitWords(state.setupStopWords), domains: state.setupSites.split(/\n/).map(function (s) { return s.trim(); }).filter(Boolean) } });
           } else {
-            state.flow = await api('/api/v1/flows/' + state.flow.id, { method: 'PATCH', body: { theme: state.setupTheme, schedule_period: state.setupPeriod, schedule_time: state.setupTime, news_limit_per_run: state.setupLimit } });
+            state.flow = await api('/api/v1/flows/' + state.flow.id, { method: 'PATCH', body: { theme: state.setupTheme, keywords: splitWords(state.setupKeywords), stop_words: splitWords(state.setupStopWords), schedule_period: state.setupPeriod, schedule_time: state.setupTime, news_limit_per_run: state.setupLimit } });
           }
           toast('Поток сохранён'); state.setupStep = 0; return go('/app');
         }
@@ -825,8 +845,8 @@
       if (a === 'saveFlow') {
         if (!gate()) return;
         var fn = value('flow-name'); if (!fn) return toast('Заполните поле', true);
-        state.flow = await api('/api/v1/flows/' + state.flow.id, { method: 'PATCH', body: { name: fn } });
-        toast('Название потока сохранено'); return render();
+        state.flow = await api('/api/v1/flows/' + state.flow.id, { method: 'PATCH', body: { name: fn, keywords: splitWords(value('flow-keywords')), stop_words: splitWords(value('flow-stopwords')) } });
+        toast('Настройки потока сохранены'); return render();
       }
     } catch (err) {
       if (err.code === 'TRIAL_EXPIRED') { modal('Демонстрация завершена', '<p>' + esc(err.message) + '</p>', 'Смотреть тарифы', function () { go('/pricing'); }); }

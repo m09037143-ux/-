@@ -196,6 +196,32 @@ def matches_theme(title: str, theme: str) -> bool:
     return any(k in low for k in keywords)
 
 
+def _keyword_matches(keyword: str, low_text: str) -> bool:
+    """Одно слово — по «основе» (как у темы); фраза из нескольких слов — все слова должны
+    встретиться (в любом порядке), либо вся фраза подстрокой."""
+    phrase = keyword.lower().strip()
+    if not phrase:
+        return False
+    if phrase in low_text:
+        return True
+    words = re.findall(r"[a-zа-яё0-9]+", phrase)
+    stems = [w[: max(4, len(w) - 2)] if len(w) >= 4 else w for w in words]
+    return bool(stems) and all(stem in low_text for stem in stems)
+
+
+def matches_flow(title: str, lead: str, theme: str, keywords: list[str] | None, stop_words: list[str] | None) -> bool:
+    """Предфильтр потока: стоп-слово в заголовке/анонсе — исключает; если заданы ключевые слова —
+    нужно хотя бы одно (в заголовке или анонсе); без ключевых слов работает прежняя проверка
+    по основам слов темы (только заголовок). Точную релевантность потом проверяет ИИ."""
+    low = f"{title} {lead}".lower()
+    for stop in stop_words or []:
+        if stop.strip() and stop.lower().strip() in low:
+            return False
+    if keywords:
+        return any(_keyword_matches(k, low) for k in keywords)
+    return matches_theme(title, theme)
+
+
 def decode_body(body: bytes, content_type: str) -> str:
     m = re.search(r"charset=([\w-]+)", content_type or "", re.I)
     if not m:
@@ -209,12 +235,19 @@ def decode_body(body: bytes, content_type: str) -> str:
         return body.decode("utf-8", errors="replace")
 
 
-def build_candidates(domain: str, items: list[ParsedListItem], theme: str, limit: int) -> list[CandidateItem]:
+def build_candidates(
+    domain: str,
+    items: list[ParsedListItem],
+    theme: str,
+    limit: int,
+    keywords: list[str] | None = None,
+    stop_words: list[str] | None = None,
+) -> list[CandidateItem]:
     candidates: list[CandidateItem] = []
     for item in items:
         if len(candidates) >= limit:
             break
-        if not matches_theme(item.title, theme):
+        if not matches_flow(item.title, item.lead, theme, keywords, stop_words):
             continue
         parts = urlsplit(item.url)
         url = f"{parts.scheme}://{parts.netloc}{parts.path}"
@@ -245,7 +278,15 @@ class HtmlSourceProvider:
 
     name = "html"
 
-    async def discover(self, *, domains: list[str], theme: str, limit: int) -> list[CandidateItem]:
+    async def discover(
+        self,
+        *,
+        domains: list[str],
+        theme: str,
+        limit: int,
+        keywords: list[str] | None = None,
+        stop_words: list[str] | None = None,
+    ) -> list[CandidateItem]:
         settings = get_settings()
         found: list[CandidateItem] = []
         for domain in domains:
@@ -269,7 +310,7 @@ class HtmlSourceProvider:
             items = parse(decode_body(result.body, result.content_type), result.final_url)
             if not items:
                 logger.warning("html source %s: no news items parsed — markup may have changed", domain)
-            found.extend(build_candidates(domain, items, theme, limit))
+            found.extend(build_candidates(domain, items, theme, limit, keywords, stop_words))
         return found
 
 

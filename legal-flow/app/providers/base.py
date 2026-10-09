@@ -20,5 +20,13 @@ class CandidateItem:
 class SourceProvider(Protocol):
     name: str
 
-    async def discover(self, *, domains: list[str], theme: str, limit: int) -> list[CandidateItem]:
+    async def discover(
+        self,
+        *,
+        domains: list[str],
+        theme: str,
+        limit: int,
+        keywords: list[str] | None = None,
+        stop_words: list[str] | None = None,
+    ) -> list[CandidateItem]:
         ...

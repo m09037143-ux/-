@@ -18,7 +18,15 @@ class FixtureSourceProvider:
 
     name = "fixture"
 
-    async def discover(self, *, domains: list[str], theme: str, limit: int) -> list[CandidateItem]:
+    async def discover(
+        self,
+        *,
+        domains: list[str],
+        theme: str,
+        limit: int,
+        keywords: list[str] | None = None,
+        stop_words: list[str] | None = None,
+    ) -> list[CandidateItem]:
         allowed = set(domains)
         items: list[CandidateItem] = []
         for idx, (title, domain) in enumerate(_HEADLINES):

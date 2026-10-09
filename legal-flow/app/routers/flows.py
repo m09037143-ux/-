@@ -61,6 +61,8 @@ def _flow_out(flow: NewsFlow, sources: list[SourceSite]) -> FlowOut:
         schedule_period=flow.schedule_period,
         schedule_time=flow.schedule_time,
         news_limit_per_run=flow.news_limit_per_run,
+        keywords=list(flow.keywords or []),
+        stop_words=list(flow.stop_words or []),
         sources=[
             SourceSiteOut(id=s.id, domain=s.domain, active=s.active, html_supported=s.domain in HTML_SUPPORTED_DOMAINS)
             for s in sources
@@ -95,6 +97,8 @@ async def create_flow(
         schedule_time=payload.schedule_time,
         news_limit_per_run=payload.news_limit_per_run,
         domains=payload.domains,
+        keywords=payload.keywords,
+        stop_words=payload.stop_words,
     )
     sources = (await db.scalars(select(SourceSite).where(SourceSite.flow_id == flow.id))).all()
     return _flow_out(flow, sources)
@@ -109,7 +113,7 @@ async def update_flow(
     db: AsyncSession = Depends(get_db),
 ):
     flow = await _get_owned_flow(db, membership, flow_id)
-    for field_name in ("name", "theme", "schedule_period", "schedule_time", "news_limit_per_run"):
+    for field_name in ("name", "theme", "schedule_period", "schedule_time", "news_limit_per_run", "keywords", "stop_words"):
         value = getattr(payload, field_name)
         if value is not None:
             setattr(flow, field_name, value)

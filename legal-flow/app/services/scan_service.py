@@ -23,6 +23,17 @@ _llm_provider = YandexGPTPro51Provider()
 MOSCOW_TZ = timezone(timedelta(hours=3))
 
 
+def theme_for_llm(flow: NewsFlow) -> str:
+    """Тема для ИИ-проверки релевантности: тема потока + ключевые слова и стоп-слова
+    (чтобы модель учитывала то же, что и предфильтр)."""
+    parts = [flow.theme]
+    if flow.keywords:
+        parts.append("Ключевые слова: " + ", ".join(flow.keywords))
+    if flow.stop_words:
+        parts.append("Не относится к теме, если речь о: " + ", ".join(flow.stop_words))
+    return ". ".join(parts)
+
+
 async def provider_name_for_flow(db: AsyncSession, flow_id: uuid.UUID) -> str:
     """"html" (реальный сбор) только если SOURCE_FIXTURE_MODE явно выключен (тот же
     принцип, что и LLM_FIXTURE_MODE — никогда не выбирается молча по догадке) И ВСЕ
@@ -155,7 +166,14 @@ async def process_scan_job(db: AsyncSession, job_id: uuid.UUID) -> ScanJob:
     created_ids: list[str] = []
     if cleared_domains:
         provider = PROVIDERS[job.provider_name]
-        candidates = await provider.discover(domains=cleared_domains, theme=flow.theme, limit=flow.news_limit_per_run)
+        candidates = await provider.discover(
+            domains=cleared_domains,
+            theme=flow.theme,
+            limit=flow.news_limit_per_run,
+            keywords=list(flow.keywords or []),
+            stop_words=list(flow.stop_words or []),
+        )
+        llm_theme = theme_for_llm(flow)
 
         llm_relevance_unavailable = False
         for item in candidates:
@@ -175,7 +193,7 @@ async def process_scan_job(db: AsyncSession, job_id: uuid.UUID) -> ScanJob:
             if not is_dup and not llm_relevance_unavailable:
                 try:
                     relevance = await _llm_provider.check_relevance(
-                        db, workspace_id=flow.workspace_id, news_item_id=None, title=item.title, theme=flow.theme
+                        db, workspace_id=flow.workspace_id, news_item_id=None, title=item.title, theme=llm_theme
                     )
                     is_relevant = relevance.is_relevant
                     relevance_reasoning = relevance.reasoning

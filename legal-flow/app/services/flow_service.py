@@ -28,6 +28,8 @@ async def create_flow(
     schedule_time: str,
     news_limit_per_run: int,
     domains: list[str],
+    keywords: list[str] | None = None,
+    stop_words: list[str] | None = None,
 ) -> NewsFlow:
     plan = await get_effective_plan(db, workspace_id)
     limits = plan.limits if plan else {}
@@ -55,6 +57,8 @@ async def create_flow(
         schedule_period=schedule_period,
         schedule_time=schedule_time,
         news_limit_per_run=news_limit_per_run,
+        keywords=list(keywords or []),
+        stop_words=list(stop_words or []),
     )
     db.add(flow)
     await db.flush()
