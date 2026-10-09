@@ -3,6 +3,7 @@ import logging
 import re
 from dataclasses import dataclass
 from html.parser import HTMLParser
+from typing import Callable
 from urllib.parse import urljoin, urlsplit
 
 from app.config import get_settings
@@ -245,3 +246,81 @@ class HtmlSourceProvider:
                 logger.warning("html source %s: no news items parsed — markup may have changed", domain)
             found.extend(build_candidates(domain, items, theme, limit))
         return found
+
+
+class _ArticleTextParser(HTMLParser):
+    """Общий, не специфичный для сайта запасной разбор: вытаскивает видимый текст
+    страницы, пропуская <script>/<style>/<nav>/<header>/<footer>/<aside> и вставляя
+    перенос строки на блочных тегах. Включает текст меню/подвала вперемешку со
+    статьёй — используется, пока для домена не заведён точный разбор в
+    ARTICLE_PARSERS (нужна живая разметка сайта, которой нет в этой среде
+    разработки — см. docs/ROADMAP.md)."""
+
+    _SKIP_TAGS = {"script", "style", "nav", "header", "footer", "aside", "noscript"}
+    _BLOCK_TAGS = {"p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6", "br", "tr"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._skip_depth = 0
+        self._parts: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self._SKIP_TAGS:
+            self._skip_depth += 1
+        elif tag in self._BLOCK_TAGS:
+            self._parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in self._SKIP_TAGS and self._skip_depth > 0:
+            self._skip_depth -= 1
+
+    def handle_data(self, data):
+        if self._skip_depth == 0:
+            self._parts.append(data)
+
+    def text(self) -> str:
+        raw = "".join(self._parts)
+        lines = [" ".join(line.split()) for line in raw.splitlines()]
+        return "\n".join(line for line in lines if line)
+
+
+def extract_visible_text(html: str) -> str:
+    parser = _ArticleTextParser()
+    parser.feed(html)
+    parser.close()
+    return parser.text()
+
+
+# Точный разбор тела статьи (без меню/подвала/рекламы) по доменам — заполняется по
+# мере изучения живой разметки каждого сайта. Домен без записи здесь получает
+# extract_visible_text() как грубый запасной вариант (см. его docstring).
+ARTICLE_PARSERS: dict[str, Callable[[str], str]] = {}
+
+_ARTICLE_TEXT_MAX_CHARS = 12_000
+
+
+async def fetch_article_text(url: str, *, domain: str) -> str | None:
+    """Скачивает страницу статьи и возвращает её текст — ТОЛЬКО для разового
+    использования как вход LLM-этапа (build_fact_passport): source_policies
+    разрешают fetch/extract_facts/temporary_store, но не retain_full_text —
+    вызывающий код не должен сохранять результат в БД как есть, только
+    извлечённые из него факты. Возвращает None при любой ошибке или блокировке;
+    вызывающий код обязан в этом случае откатиться на уже сохранённый короткий
+    фрагмент (discovery_original_fragment), а не падать."""
+    settings = get_settings()
+    try:
+        result = await fetch_url(
+            url,
+            timeout_seconds=settings.fetch_timeout_seconds,
+            max_bytes=settings.fetch_max_bytes,
+            max_redirects=settings.fetch_max_redirects,
+        )
+    except (AccessLimitedError, SSRFBlockedError) as exc:
+        logger.warning("article fetch %s skipped: %s", url, exc)
+        return None
+    if result.status_code != 200:
+        logger.warning("article fetch %s skipped: HTTP %s", url, result.status_code)
+        return None
+    parse = ARTICLE_PARSERS.get(domain, extract_visible_text)
+    text = parse(decode_body(result.body, result.content_type)).strip()
+    return text[:_ARTICLE_TEXT_MAX_CHARS] if text else None

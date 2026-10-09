@@ -1,15 +1,41 @@
+import logging
 import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import FactPassport, NewsItem
+from app.models import Discovery, FactPassport, NewsItem
 from app.models.enums import FactStatus
+from app.providers.html_source import SUPPORTED_DOMAINS as HTML_SUPPORTED_DOMAINS, fetch_article_text
 from app.providers.yandex_gpt import YandexGPTPro51Provider
 from app.services import news_service
 from app.services.activity_service import log_activity
 
+logger = logging.getLogger("app.services.ai_service")
+
 _provider = YandexGPTPro51Provider()
+
+
+async def _fact_source_fragment(db: AsyncSession, news: NewsItem) -> str:
+    """Короткий фрагмент со страницы списка (discovery_original_fragment) — вход по
+    умолчанию для паспорта фактов. Для материалов с реально поддержанных сайтов
+    (HtmlSourceProvider) вместо него пробуем прочитать статью целиком по ссылке —
+    паспорт фактов получается полнее, чем по одному анонсу. Текст статьи нигде не
+    сохраняется (source_policies разрешают fetch/extract_facts/temporary_store, но
+    не retain_full_text) — используется только как вход этого одного вызова LLM.
+    При любой ошибке (сайт недоступен, блокировка, разметка изменилась) молча
+    откатываемся на короткий фрагмент — генерация черновика не должна падать
+    из-за того, что не получилось дочитать статью."""
+    if news.discovery_domain not in HTML_SUPPORTED_DOMAINS or news.discovery_id is None:
+        return news.discovery_original_fragment
+    discovery = await db.get(Discovery, news.discovery_id)
+    if discovery is None:
+        return news.discovery_original_fragment
+    full_text = await fetch_article_text(discovery.normalized_url, domain=news.discovery_domain)
+    if not full_text:
+        logger.info("news %s: full article fetch failed, falling back to short fragment", news.id)
+        return news.discovery_original_fragment
+    return full_text
 
 
 async def generate_ai_draft(db: AsyncSession, *, news: NewsItem, expected_version: int, user_id: uuid.UUID) -> dict:
@@ -21,8 +47,9 @@ async def generate_ai_draft(db: AsyncSession, *, news: NewsItem, expected_versio
     relevance = await _provider.check_relevance(
         db, workspace_id=news.workspace_id, news_item_id=news.id, title=news.title, theme=news.title
     )
+    source_fragment = await _fact_source_fragment(db, news)
     facts = await _provider.build_fact_passport(
-        db, workspace_id=news.workspace_id, news_item_id=news.id, source_fragment=news.discovery_original_fragment
+        db, workspace_id=news.workspace_id, news_item_id=news.id, source_fragment=source_fragment
     )
     facts_text = "\n".join(
         f"- {s.statement} [{s.status}] (фрагмент: {s.source_fragment})" for s in facts.statements
