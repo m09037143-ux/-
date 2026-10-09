@@ -341,6 +341,11 @@
       state.flow ? button('▶ Приступить к сбору', 'collect', 'primary') : '');
   }
 
+  function limitOptions() {
+    var cap = state.access && state.access.limits && state.access.limits.max_news_per_run;
+    return [1, 3, 5, 10, 20, 30, 50].filter(function (v) { return !cap || v <= cap; });
+  }
+
   function allowedSchedulePeriods() {
     var limits = state.access && state.access.limits;
     if (limits && limits.manual_or_daily_schedule_only) return ['Вручную', 'Ежедневно'];
@@ -375,7 +380,7 @@
     } else if (i === 2) {
       body = '<h3>Расписание</h3><div class="field"><label for="setup-period">Периодичность</label><select id="setup-period">' + allowedPeriods.map(function (v) { return '<option ' + (v === state.setupPeriod ? 'selected' : '') + '>' + v + '</option>'; }).join('') + '</select>' + (allowedPeriods.length < 4 ? '<p class="small">Текущий тариф допускает только ручной или ежедневный запуск.</p>' : '') + '</div>' + field('setup-time', 'Время, Москва UTC+3', 'time', state.setupTime);
     } else {
-      body = '<h3>Количество новостей за запуск</h3>' + [1, 3, 5, 10].map(function (v) { return '<label style="display:inline-block;margin:9px"><input type="radio" name="limit" value="' + v + '" ' + (state.setupLimit === v ? 'checked' : '') + '> ' + v + '</label>'; }).join('') + '<p class="notice">' + esc(state.setupTheme) + ' · ' + esc(state.setupPeriod) + ', ' + esc(state.setupTime) + (splitWords(state.setupKeywords).length ? '<br>Ключевые слова: ' + esc(splitWords(state.setupKeywords).join(', ')) : '') + (splitWords(state.setupStopWords).length ? '<br>Стоп-слова: ' + esc(splitWords(state.setupStopWords).join(', ')) : '') + '</p>';
+      body = '<h3>Сколько новых материалов собирать за запуск</h3><p class="small">Считаются только новые, подходящие по теме: уже собранные и неподходящие лимит не расходуют. Максимум — по вашему тарифу.</p>' + limitOptions().map(function (v) { return '<label style="display:inline-block;margin:9px"><input type="radio" name="limit" value="' + v + '" ' + (state.setupLimit === v ? 'checked' : '') + '> ' + v + '</label>'; }).join('') + '<p class="notice">' + esc(state.setupTheme) + ' · ' + esc(state.setupPeriod) + ', ' + esc(state.setupTime) + (splitWords(state.setupKeywords).length ? '<br>Ключевые слова: ' + esc(splitWords(state.setupKeywords).join(', ')) : '') + (splitWords(state.setupStopWords).length ? '<br>Стоп-слова: ' + esc(splitWords(state.setupStopWords).join(', ')) : '') + '</p>';
     }
     return page(hasFlow ? 'Настроить поток' : 'Создать поток', '<p class="tag">Шаг ' + (i + 1) + ' из 4</p><div class="card" style="max-width:740px">' + body + '<div class="row" style="margin-top:22px">' + (i ? button('Назад', 'setupBack') : '<span></span>') + button(i === 3 ? 'Сохранить' : 'Продолжить', i === 3 ? 'setupSave' : 'setupNext', 'primary') + '</div></div>', 'Лимиты (число потоков/сайтов/новостей) проверяет сервер по вашему тарифу.');
   }

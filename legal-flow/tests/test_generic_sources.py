@@ -410,3 +410,39 @@ async def test_changing_to_same_domain_reonboards_legacy_site_only_when_needed(m
     await flow_service.change_source_domain(None, site=legacy, domain="rapsinews.ru")
     assert calls == []
 
+
+# ---------------- следующие страницы списка ----------------
+
+def _pravo_pages(monkeypatch, *, pages: int, robots_blocks_page2: bool = False):
+    from app.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "list_pages_per_site", pages)
+    page1 = _fx("pravo_news_list.html")
+    page2 = page1.replace("/news/2661", "/news/3661")  # другие адреса = «новая» страница
+    web = _patch_web(monkeypatch, {
+        "https://pravo.ru/news/": page1,
+        "https://pravo.ru/news/?page=2": page2,
+        "https://pravo.ru/news/?page=3": page2,  # повтор второй страницы — «новых записей нет»
+    })
+
+    async def robots(url):
+        return not (robots_blocks_page2 and "page=2" in url)
+
+    monkeypatch.setattr(html_source, "robots_allows", robots)
+    return web
+
+
+@pytest.mark.asyncio
+async def test_builtin_site_reads_next_pages_until_no_new_items(monkeypatch):
+    web = _pravo_pages(monkeypatch, pages=3)
+    items = await HtmlSourceProvider().discover(domains=["pravo.ru"], theme="", limit=100)
+    assert len(items) == 10  # 5 + 5 новых; третья страница — повтор второй, чтение остановилось
+    assert web.calls == ["https://pravo.ru/news/", "https://pravo.ru/news/?page=2", "https://pravo.ru/news/?page=3"]
+
+
+@pytest.mark.asyncio
+async def test_pagination_can_be_limited_and_respects_robots(monkeypatch):
+    _pravo_pages(monkeypatch, pages=1)
+    assert len(await HtmlSourceProvider().discover(domains=["pravo.ru"], theme="", limit=100)) == 5
+    _pravo_pages(monkeypatch, pages=3, robots_blocks_page2=True)
+    assert len(await HtmlSourceProvider().discover(domains=["pravo.ru"], theme="", limit=100)) == 5

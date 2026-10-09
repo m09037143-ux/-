@@ -24,6 +24,23 @@ _llm_provider = YandexGPTPro51Provider()
 MOSCOW_TZ = timezone(timedelta(hours=3))
 
 
+_MAX_RELEVANCE_CHECKS_PER_JOB = 60  # потолок ИИ-проверок темы за один сбор (расход токенов)
+_CANDIDATE_POOL_FACTOR = 4
+
+
+def interleave_by_domain(candidates: list[CandidateItem]) -> list[CandidateItem]:
+    """По кругу: по одному материалу с каждого сайта, чтобы один сайт не выбрал всю квоту."""
+    queues: dict[str, list[CandidateItem]] = {}
+    for c in candidates:
+        queues.setdefault(c.discovery_domain, []).append(c)
+    ordered: list[CandidateItem] = []
+    while any(queues.values()):
+        for q in queues.values():
+            if q:
+                ordered.append(q.pop(0))
+    return ordered
+
+
 def theme_for_llm(flow: NewsFlow) -> str:
     """Тема для ИИ-проверки релевантности: тема потока + ключевые слова и стоп-слова
     (чтобы модель учитывала то же, что и предфильтр)."""
@@ -206,7 +223,7 @@ async def process_scan_job(db: AsyncSession, job_id: uuid.UUID) -> ScanJob:
         candidates = await provider.discover(
             domains=cleared_domains,
             theme=flow.theme,
-            limit=flow.news_limit_per_run,
+            limit=max(flow.news_limit_per_run * _CANDIDATE_POOL_FACTOR, 30),  # с запасом: часть отсеют дубликаты и ИИ
             keywords=list(flow.keywords or []),
             stop_words=list(flow.stop_words or []),
             sources=hints,
@@ -214,12 +231,17 @@ async def process_scan_job(db: AsyncSession, job_id: uuid.UUID) -> ScanJob:
         llm_theme = theme_for_llm(flow)
 
         llm_relevance_unavailable = False
-        for item in candidates:
+        relevance_checks = 0
+        # Лимит потока — это число НОВЫХ материалов за запуск (а не первые N записей списка):
+        # дубликаты и отсеянные по теме не расходуют квоту, поэтому повторный запуск доходит дальше.
+        for item in interleave_by_domain(candidates):
+            if len(created_ids) >= flow.news_limit_per_run or relevance_checks >= _MAX_RELEVANCE_CHECKS_PER_JOB:
+                break
             existing = await _is_duplicate(db, workspace_id=flow.workspace_id, item=item)
             is_dup = existing is not None
 
-            # Разбор заголовка (provider.discover's matches_theme, для HtmlSourceProvider)
-            # — дешёвый предфильтр по ключевым словам, не настоящее понимание темы.
+            # Предфильтр провайдера — только ключевые/стоп-слова потока, если они заданы;
+            # понимание темы — вот этот шаг.
             # Здесь — тот самый "ИИ сама изучила и отобрала по теме" шаг: реальная
             # проверка через YandexGPT (ТЗ не говорит иначе про отбор по теме, и это
             # прямой запрос владельца проекта). Не настоящий отказ в доступе к модели
@@ -229,6 +251,7 @@ async def process_scan_job(db: AsyncSession, job_id: uuid.UUID) -> ScanJob:
             is_relevant = True
             relevance_reasoning = ""
             if not is_dup and not llm_relevance_unavailable:
+                relevance_checks += 1
                 try:
                     relevance = await _llm_provider.check_relevance(
                         db, workspace_id=flow.workspace_id, news_item_id=None, title=item.title, theme=llm_theme

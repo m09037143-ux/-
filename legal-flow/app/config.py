@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     fetch_max_bytes: int = 2_000_000
     fetch_timeout_seconds: float = 8.0
     fetch_max_redirects: int = 3
+    # Сколько страниц списка новостей читать у сайтов с постраничной навигацией (pravo.ru, consultant.ru)
+    list_pages_per_site: int = 3
     # Тот же явный переключатель, что и llm_fixture_mode — никогда не выбирается тихо
     # по догадке (например, "эти домены я вроде умею разбирать"). true — весь сбор идёт
     # через FixtureSourceProvider (вымышленные материалы, в сеть не ходит); false — нужен

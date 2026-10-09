@@ -8,7 +8,6 @@ from app.providers.html_source import (
     HtmlSourceProvider,
     build_candidates,
     decode_body,
-    matches_theme,
     parse_consultant_listing,
     parse_garant_listing,
     parse_pravo_listing,
@@ -72,14 +71,6 @@ def test_parsers_return_nothing_on_unrelated_markup():
     assert parse_consultant_listing("<html><body><p>нет новостей</p></body></html>") == []
 
 
-def test_matches_theme_is_case_insensitive_stem_match():
-    assert matches_theme("Банкротство застройщика: новое разъяснение ВС", "Банкротство и корпоративные споры")
-    assert matches_theme("ВС РФ рассмотрел КОРПОРАТИВНЫЙ спор", "корпоративные споры")
-    assert not matches_theme("Запустили роботов-доставщиков", "Банкротство и корпоративные споры")
-    # тема без слов от 4 букв — предфильтр не применяется
-    assert matches_theme("Любой заголовок", "и в на")
-
-
 def test_decode_body_handles_windows_1251():
     body = "Новости".encode("cp1251")
     assert decode_body(body, "text/html; charset=windows-1251") == "Новости"
@@ -102,7 +93,9 @@ def test_build_candidates_respects_limit_and_normalizes():
 
 def _fake_fetch(pages: dict[str, FetchResult | Exception]):
     async def fetch(url, **kwargs):
-        result = pages[url]
+        result = pages.get(url)
+        if result is None:  # неизвестный адрес (например, следующая страница списка) — как будто её нет
+            return FetchResult(url, 404, "text/html", b"")
         if isinstance(result, Exception):
             raise result
         return result
@@ -126,7 +119,7 @@ async def test_discover_uses_fetch_url_and_filters_by_theme(monkeypatch):
     assert len(all_items) == 6  # limit — на домен
     assert any(c.title.startswith("В 34 регионах") for c in all_items)
 
-    filtered = await provider.discover(domains=["garant.ru", "pravo.ru"], theme="жилье квартира", limit=5)
+    filtered = await provider.discover(domains=["garant.ru", "pravo.ru"], theme="", limit=5, keywords=["жилье", "квартира"])
     assert filtered and all("жиль" in c.title.lower() or "квартир" in c.title.lower() for c in filtered)
 
 
@@ -176,7 +169,8 @@ async def test_scan_job_uses_html_provider_for_supported_domains(authed, monkeyp
 
     job = await run_next_pending_job()
     assert job.status.value == "done"
-    assert len(job.created_news_ids) == 6
+    # лимит потока (3) — это число НОВЫХ материалов за запуск в сумме по сайтам, а не на каждый сайт
+    assert len(job.created_news_ids) == 3
 
     titles = [n["title"] for n in (await authed.get("/api/v1/news")).json()]
     assert "Немецкие власти решили реприватизировать бывшую «дочку» «Газпрома»" in titles
@@ -215,6 +209,6 @@ async def test_discover_includes_consultant_via_site_registry(monkeypatch):
         ),
     }
     monkeypatch.setattr(html_source, "fetch_url", _fake_fetch(pages))
-    items = await HtmlSourceProvider().discover(domains=["consultant.ru"], theme="налоговый вычет", limit=5)
+    items = await HtmlSourceProvider().discover(domains=["consultant.ru"], theme="", limit=5, keywords=["налоговый вычет"])
     assert [c.title for c in items] == ["Налоговый вычет на лечение: ФНС напомнила, как подтвердить расходы"]
     assert "consultant.ru" in html_source.SUPPORTED_DOMAINS

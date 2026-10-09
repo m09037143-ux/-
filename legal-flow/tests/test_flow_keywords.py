@@ -32,9 +32,28 @@ def test_multiword_keyword_requires_all_words_any_order():
     assert not matches_flow("Взыскание долга с директора", "", "Т", ["убытки директора"], None)
 
 
-def test_without_keywords_theme_stems_still_decide_on_title_only():
-    assert matches_flow("Банкротство застройщика", "", "Банкротство и корпоративные споры", [], [])
-    assert not matches_flow("Запустили роботов-доставщиков", "банкротство в лиде", "Банкротство и корпоративные споры", [], [])
+def test_without_keywords_theme_is_left_to_the_ai_check():
+    # без ключевых слов предфильтр ничего не режет (кроме стоп-слов): тему оценивает ИИ
+    assert matches_flow("Запустили роботов-доставщиков", "", "Банкротство и корпоративные споры", [], [])
+    assert not matches_flow("Запустили роботов-доставщиков", "", "Тема", [], ["роботов"])
+
+
+def test_keywords_and_stop_words_match_from_the_start_of_a_word():
+    assert matches_flow("Спор о границах участка", "", "Т", ["спор"], None)
+    assert not matches_flow("Новые правила для транспорте и логистики", "", "Т", ["спор"], None)  # «спор» внутри слова
+    assert matches_flow("Банкротство застройщика", "", "Т", None, ["транспорт"])  # стоп-слово тоже с начала слова
+    assert not matches_flow("Новые правила для транспортных компаний", "", "Т", None, ["транспорт"])
+
+
+def test_interleave_takes_one_per_site_in_turn():
+    from app.providers.base import CandidateItem
+    from app.services.scan_service import interleave_by_domain
+
+    def c(domain, n):
+        return CandidateItem(title=f"{domain}{n}", discovery_domain=domain, normalized_url=f"https://{domain}/{n}", original_fragment="", story_key=f"{domain}{n}")
+
+    ordered = interleave_by_domain([c("a.ru", 1), c("a.ru", 2), c("a.ru", 3), c("b.ru", 1), c("c.ru", 1)])
+    assert [x.title for x in ordered] == ["a.ru1", "b.ru1", "c.ru1", "a.ru2", "a.ru3"]
 
 
 def test_build_candidates_applies_keywords_and_stop_words():

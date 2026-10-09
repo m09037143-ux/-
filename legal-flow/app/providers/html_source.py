@@ -182,23 +182,19 @@ SITES = {
 }
 SUPPORTED_DOMAINS = frozenset(SITES)
 
+# Следующие страницы списка (номер страницы подставляется вместо {n}; первая — обычный адрес).
+# На garant.ru длинная первая страница (≈50 записей), постраничной навигации у списка нет.
+PAGE_URLS = {
+    "pravo.ru": "https://pravo.ru/news/?page={n}",
+    "consultant.ru": "https://www.consultant.ru/legalnews/?page={n}",
+}
+
 _ID_RE = re.compile(r"/(?:legal)?news/(\d+)")
 
 
-def theme_keywords(theme: str) -> list[str]:
-    """Грубые «основы» слов темы: слова от 4 букв, у длинных отрезаем 2 последние буквы,
-    чтобы «банкротство» находило «банкротстве». Точную релевантность потом проверяет
-    check_relevance (LLM) — здесь только дешёвый предфильтр."""
-    words = re.findall(r"[a-zа-яё0-9]+", theme.lower())
-    return [w[: max(4, len(w) - 2)] for w in words if len(w) >= 4]
-
-
-def matches_theme(title: str, theme: str) -> bool:
-    keywords = theme_keywords(theme)
-    if not keywords:
-        return True
-    low = title.lower()
-    return any(k in low for k in keywords)
+def _has_word_prefix(stem: str, low_text: str) -> bool:
+    """Основа должна совпасть с НАЧАЛОМ слова: «спор» находит «спорный», «споре», но не «транспорте»."""
+    return re.search(r"(?<![a-zа-яё0-9])" + re.escape(stem), low_text) is not None
 
 
 def _keyword_matches(keyword: str, low_text: str) -> bool:
@@ -207,24 +203,25 @@ def _keyword_matches(keyword: str, low_text: str) -> bool:
     phrase = keyword.lower().strip()
     if not phrase:
         return False
-    if phrase in low_text:
+    if _has_word_prefix(phrase, low_text):
         return True
     words = re.findall(r"[a-zа-яё0-9]+", phrase)
     stems = [w[: max(4, len(w) - 2)] if len(w) >= 4 else w for w in words]
-    return bool(stems) and all(stem in low_text for stem in stems)
+    return bool(stems) and all(_has_word_prefix(stem, low_text) for stem in stems)
 
 
 def matches_flow(title: str, lead: str, theme: str, keywords: list[str] | None, stop_words: list[str] | None) -> bool:
     """Предфильтр потока: стоп-слово в заголовке/анонсе — исключает; если заданы ключевые слова —
-    нужно хотя бы одно (в заголовке или анонсе); без ключевых слов работает прежняя проверка
-    по основам слов темы (только заголовок). Точную релевантность потом проверяет ИИ."""
+    нужно хотя бы одно (в заголовке или анонсе). Без ключевых слов тему НЕ режем по основам слов
+    (это терялo «оспорить» при теме «споры» и пропускало «транспорте» по основе «спор») —
+    тему оценивает ИИ-проверка по заголовку (scan_service). Параметр theme оставлен для совместимости."""
     low = f"{title} {lead}".lower()
     for stop in stop_words or []:
-        if stop.strip() and stop.lower().strip() in low:
+        if stop.strip() and _has_word_prefix(stop.lower().strip(), low):
             return False
     if keywords:
         return any(_keyword_matches(k, low) for k in keywords)
-    return matches_theme(title, theme)
+    return True
 
 
 def decode_body(body: bytes, content_type: str) -> str:
@@ -331,8 +328,39 @@ class HtmlSourceProvider:
             items = parse(decode_body(result.body, result.content_type), result.final_url)
             if not items:
                 logger.warning("html source %s: no news items parsed — markup may have changed", domain)
+            elif domain in PAGE_URLS:
+                items = await self._more_pages(domain, parse, items, settings.list_pages_per_site)
             found.extend(build_candidates(domain, items, theme, limit, keywords, stop_words))
         return found
+
+    async def _more_pages(self, domain: str, parse, items: list[ParsedListItem], pages: int) -> list[ParsedListItem]:
+        """Дочитывает следующие страницы списка (до pages всего), пока на них есть новые записи.
+        Любой сбой на следующей странице просто останавливает чтение — первая страница уже есть."""
+        settings = get_settings()
+        seen = {i.url for i in items}
+        merged = list(items)
+        for n in range(2, max(pages, 1) + 1):
+            url = PAGE_URLS[domain].format(n=n)
+            if not await robots_allows(url):
+                break
+            try:
+                result = await fetch_url(
+                    url,
+                    timeout_seconds=settings.fetch_timeout_seconds,
+                    max_bytes=settings.fetch_max_bytes,
+                    max_redirects=settings.fetch_max_redirects,
+                )
+            except (AccessLimitedError, SSRFBlockedError) as exc:
+                logger.warning("html source %s page %s skipped: %s", domain, n, exc)
+                break
+            if result.status_code != 200:
+                break
+            fresh = [i for i in parse(decode_body(result.body, result.content_type), result.final_url) if i.url not in seen]
+            if not fresh:
+                break
+            seen |= {i.url for i in fresh}
+            merged.extend(fresh)
+        return merged
 
 
     async def _discover_generic(
