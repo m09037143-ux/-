@@ -183,7 +183,7 @@ class YandexGPTPro51Provider:
             )
         return parsed
 
-    async def check_relevance(self, db, *, workspace_id: uuid.UUID, news_item_id: uuid.UUID, title: str, theme: str) -> RelevanceResult:
+    async def check_relevance(self, db, *, workspace_id: uuid.UUID, news_item_id: uuid.UUID | None, title: str, theme: str) -> RelevanceResult:
         prompt = (
             f"[{PROMPT_VERSION}:relevance] Тема потока: {theme}\nЗаголовок: {title}\n\n"
             "Определи, относится ли заголовок к теме потока. "

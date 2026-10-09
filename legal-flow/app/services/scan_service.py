@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import datetime, time, timedelta, timezone
 
@@ -5,14 +6,19 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.errors import AppError
 from app.models import Discovery, NewsFlow, NewsItem, ScanJob, SourcePolicy, SourceSite, Story
 from app.models.enums import NewsStatus, ScanJobStatus
 from app.providers.base import CandidateItem
 from app.providers.fixture_source import FixtureSourceProvider
 from app.providers.html_source import SUPPORTED_DOMAINS as HTML_SUPPORTED_DOMAINS, HtmlSourceProvider
+from app.providers.yandex_gpt import YandexGPTPro51Provider
 from app.services.activity_service import log_activity
 
+logger = logging.getLogger("app.services.scan_service")
+
 PROVIDERS = {"fixture": FixtureSourceProvider(), "html": HtmlSourceProvider()}
+_llm_provider = YandexGPTPro51Provider()
 
 MOSCOW_TZ = timezone(timedelta(hours=3))
 
@@ -151,9 +157,41 @@ async def process_scan_job(db: AsyncSession, job_id: uuid.UUID) -> ScanJob:
         provider = PROVIDERS[job.provider_name]
         candidates = await provider.discover(domains=cleared_domains, theme=flow.theme, limit=flow.news_limit_per_run)
 
+        llm_relevance_unavailable = False
         for item in candidates:
             existing = await _is_duplicate(db, workspace_id=flow.workspace_id, item=item)
             is_dup = existing is not None
+
+            # Разбор заголовка (provider.discover's matches_theme, для HtmlSourceProvider)
+            # — дешёвый предфильтр по ключевым словам, не настоящее понимание темы.
+            # Здесь — тот самый "ИИ сама изучила и отобрала по теме" шаг: реальная
+            # проверка через YandexGPT (ТЗ не говорит иначе про отбор по теме, и это
+            # прямой запрос владельца проекта). Не настоящий отказ в доступе к модели
+            # (не настроена/бюджет исчерпан) не должен проваливать весь сбор — тогда
+            # просто перестаём звать LLM до конца этого задания и не отбрасываем
+            # оставшиеся кандидаты только из-за этого.
+            is_relevant = True
+            relevance_reasoning = ""
+            if not is_dup and not llm_relevance_unavailable:
+                try:
+                    relevance = await _llm_provider.check_relevance(
+                        db, workspace_id=flow.workspace_id, news_item_id=None, title=item.title, theme=flow.theme
+                    )
+                    is_relevant = relevance.is_relevant
+                    relevance_reasoning = relevance.reasoning
+                except AppError as exc:
+                    logger.warning(
+                        "LLM relevance check недоступна (%s), дальше в этом задании кандидаты "
+                        "проходят без проверки темы: %s", exc.code, exc.message,
+                    )
+                    llm_relevance_unavailable = True
+
+            if is_dup:
+                decision_reason = "duplicate_of_existing_discovery"
+            elif not is_relevant:
+                decision_reason = "not_relevant_to_theme"
+            else:
+                decision_reason = "new_story"
 
             discovery = Discovery(
                 workspace_id=flow.workspace_id,
@@ -164,13 +202,13 @@ async def process_scan_job(db: AsyncSession, job_id: uuid.UUID) -> ScanJob:
                 story_key=item.story_key,
                 is_duplicate=is_dup,
                 duplicate_of_news_id=None,
-                decision_reason="duplicate_of_existing_discovery" if is_dup else "new_story",
-                metadata_json={"label": item.label},
+                decision_reason=decision_reason,
+                metadata_json={"label": item.label, "relevance_reasoning": relevance_reasoning} if relevance_reasoning else {"label": item.label},
             )
             db.add(discovery)
             await db.flush()
 
-            if is_dup:
+            if is_dup or not is_relevant:
                 continue
 
             story = await db.scalar(select(Story).where(Story.workspace_id == flow.workspace_id, Story.story_key == item.story_key))
