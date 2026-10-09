@@ -400,8 +400,19 @@
   function sourcesPage() {
     if (!state.flow) return page('Сайты для обнаружения тем', '<p class="notice">Сначала создайте поток.</p>', '', button('Создать поток', 'setup', 'primary'));
     var sources = state.flow.sources || [];
-    return page('Сайты для обнаружения тем', '<div style="display:grid;gap:12px">' + sources.map(function (x) {
-      return '<div class="card row"><div><strong>' + esc(x.domain) + '</strong><p class="small">Права и доступность не проверены автоматически.</p></div><div class="row"><label><input type="checkbox" data-toggle="' + x.id + '" ' + (x.active ? 'checked' : '') + '> Активен</label>' + button('Изменить', 'editSource', '', 'data-id="' + x.id + '"') + button('Удалить', 'deleteSource', '', 'data-id="' + x.id + '"') + '</div></div>';
+    var activeSources = sources.filter(function (x) { return x.active; });
+    var activeSupported = activeSources.filter(function (x) { return x.html_supported; });
+    var mixedActiveSources = activeSupported.length > 0 && activeSupported.length < activeSources.length;
+    var notice = mixedActiveSources
+      ? '<p class="notice warning">В потоке активны и сайты с реальным сбором, и пока не поддержанные — пока активен ' +
+        'хотя бы один неподдерживаемый сайт, весь сбор идёт через демо-материалы (DEMO_FIXTURE). Отключите ' +
+        'неподдерживаемые сайты (снимите «Активен»), чтобы включить реальный сбор для остальных.</p>'
+      : '';
+    return page('Сайты для обнаружения тем', notice + '<div style="display:grid;gap:12px">' + sources.map(function (x) {
+      var badge = x.html_supported
+        ? '<span class="status ready">Реальный сбор</span>'
+        : '<span class="status draft">Демо (DEMO_FIXTURE)</span>';
+      return '<div class="card row"><div><strong>' + esc(x.domain) + '</strong> ' + badge + '<p class="small">Права и доступность не проверены автоматически.</p></div><div class="row"><label><input type="checkbox" data-toggle="' + x.id + '" ' + (x.active ? 'checked' : '') + '> Активен</label>' + button('Изменить', 'editSource', '', 'data-id="' + x.id + '"') + button('Удалить', 'deleteSource', '', 'data-id="' + x.id + '"') + '</div></div>';
     }).join('') + '</div>', 'Сайты обнаружения не являются официальными документами', button('Добавить сайт', 'addSource'));
   }
 

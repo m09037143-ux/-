@@ -1,5 +1,6 @@
 import pytest
 
+from app.config import get_settings
 from tests.conftest import unique_email
 
 pytestmark = pytest.mark.asyncio
@@ -32,3 +33,37 @@ async def test_toggle_source_active_without_deleting(authed):
 
     listing = await authed.get("/api/v1/flows")
     assert listing.json()[0]["sources"][0]["active"] is False
+
+
+async def test_sources_report_html_support_and_flow_real_collection_flag(authed, monkeypatch):
+    monkeypatch.setattr(get_settings(), "source_fixture_mode", False)
+    email = unique_email("source-support")
+    await authed.post("/api/v1/auth/register", json={"name": "S", "email": email, "password": "correct-horse-battery"})
+    flow = await authed.post(
+        "/api/v1/flows",
+        json={"name": "F", "theme": "Т", "domains": ["garant.ru", "pravo.ru"], "news_limit_per_run": 1},
+    )
+    assert flow.json()["real_collection_enabled"] is True
+    assert all(s["html_supported"] for s in flow.json()["sources"])
+
+
+async def test_mixed_domains_disable_real_collection_for_whole_flow(authed, monkeypatch):
+    monkeypatch.setattr(get_settings(), "source_fixture_mode", False)
+    email = unique_email("source-mixed")
+    await authed.post("/api/v1/auth/register", json={"name": "S", "email": email, "password": "correct-horse-battery"})
+    flow = await authed.post(
+        "/api/v1/flows",
+        json={"name": "F", "theme": "Т", "domains": ["garant.ru", "consultant.ru"], "news_limit_per_run": 1},
+    )
+    assert flow.json()["real_collection_enabled"] is False
+    by_domain = {s["domain"]: s["html_supported"] for s in flow.json()["sources"]}
+    assert by_domain == {"garant.ru": True, "consultant.ru": False}
+
+
+async def test_real_collection_disabled_when_source_fixture_mode_is_default_on(authed):
+    email = unique_email("source-fixturemode")
+    await authed.post("/api/v1/auth/register", json={"name": "S", "email": email, "password": "correct-horse-battery"})
+    flow = await authed.post(
+        "/api/v1/flows", json={"name": "F", "theme": "Т", "domains": ["garant.ru"], "news_limit_per_run": 1}
+    )
+    assert flow.json()["real_collection_enabled"] is False

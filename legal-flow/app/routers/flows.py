@@ -10,6 +10,7 @@ from app.deps import get_current_membership, require_active_access, require_csrf
 from app.errors import AppError
 from app.models import Discovery, Membership, NewsFlow, ScanJob, SourceSite
 from app.models.enums import Role
+from app.providers.html_source import SUPPORTED_DOMAINS as HTML_SUPPORTED_DOMAINS
 from app.schemas.flows import (
     AddSourceRequest,
     CreateFlowRequest,
@@ -44,6 +45,15 @@ async def _get_owned_flow(db: AsyncSession, membership: Membership, flow_id: uui
 
 
 def _flow_out(flow: NewsFlow, sources: list[SourceSite]) -> FlowOut:
+    # Тот же критерий, что и scan_service.provider_name_for_flow — держать в одном
+    # месте нельзя, та функция асинхронная и берёт домены из БД по flow_id, а не из
+    # уже загруженного списка sources; при изменении правила менять оба места.
+    active_domains = [s.domain for s in sources if s.active]
+    real_collection_enabled = (
+        not get_settings().source_fixture_mode
+        and bool(active_domains)
+        and all(d in HTML_SUPPORTED_DOMAINS for d in active_domains)
+    )
     return FlowOut(
         id=flow.id,
         name=flow.name,
@@ -51,7 +61,11 @@ def _flow_out(flow: NewsFlow, sources: list[SourceSite]) -> FlowOut:
         schedule_period=flow.schedule_period,
         schedule_time=flow.schedule_time,
         news_limit_per_run=flow.news_limit_per_run,
-        sources=[SourceSiteOut(id=s.id, domain=s.domain, active=s.active) for s in sources],
+        sources=[
+            SourceSiteOut(id=s.id, domain=s.domain, active=s.active, html_supported=s.domain in HTML_SUPPORTED_DOMAINS)
+            for s in sources
+        ],
+        real_collection_enabled=real_collection_enabled,
     )
 
 
@@ -114,7 +128,7 @@ async def add_source(
 ):
     flow = await _get_owned_flow(db, membership, flow_id)
     site = await flow_service.add_source(db, flow=flow, workspace_id=membership.workspace_id, domain=payload.domain)
-    return SourceSiteOut(id=site.id, domain=site.domain, active=site.active)
+    return SourceSiteOut(id=site.id, domain=site.domain, active=site.active, html_supported=site.domain in HTML_SUPPORTED_DOMAINS)
 
 
 @router.patch("/flows/{flow_id}/sources/{source_id}", response_model=SourceSiteOut, dependencies=[Depends(require_csrf)])
@@ -135,7 +149,7 @@ async def update_source(
     if payload.active is not None:
         site.active = payload.active
     await db.commit()
-    return SourceSiteOut(id=site.id, domain=site.domain, active=site.active)
+    return SourceSiteOut(id=site.id, domain=site.domain, active=site.active, html_supported=site.domain in HTML_SUPPORTED_DOMAINS)
 
 
 @router.delete("/flows/{flow_id}/sources/{source_id}", status_code=204, dependencies=[Depends(require_csrf)])

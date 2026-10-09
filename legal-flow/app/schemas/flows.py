@@ -25,6 +25,7 @@ class SourceSiteOut(BaseModel):
     id: uuid.UUID
     domain: str
     active: bool
+    html_supported: bool = False
 
 
 class FlowOut(BaseModel):
@@ -35,6 +36,7 @@ class FlowOut(BaseModel):
     schedule_time: str
     news_limit_per_run: int
     sources: list[SourceSiteOut] = Field(default_factory=list)
+    real_collection_enabled: bool = False
 
 
 class AddSourceRequest(BaseModel):
