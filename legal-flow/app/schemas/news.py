@@ -100,3 +100,22 @@ class ActivityEventOut(BaseModel):
     action: str
     details: dict
     created_at: datetime
+
+
+class SimilarityOut(BaseModel):
+    share: float
+    longest_run_words: int
+    longest_run_text: str
+    warning: bool
+
+
+class SourceViewOut(BaseModel):
+    url: str | None
+    domain: str
+    fragment: str
+    published: str
+    live: bool
+    models: dict | None = None
+    text: str | None = None
+    text_note: str | None = None
+    similarity: SimilarityOut | None = None

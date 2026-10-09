@@ -5,12 +5,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import AppError
-from app.models import Discovery, FactPassport, Membership, NewsFlow, NewsItem, ScanJob
+from app.models import ActivityEvent, Discovery, FactPassport, Membership, NewsFlow, NewsItem, ScanJob
 from app.models.enums import FactStatus, NewsStatus, Role
 from app.providers.html_source import fetch_article_text
 from app.providers.yandex_gpt import RelevanceResult, YandexGPTPro51Provider
 from app.services import news_service
 from app.services.activity_service import log_activity
+from app.services.text_similarity import text_overlap
 
 logger = logging.getLogger("app.services.ai_service")
 
@@ -161,3 +162,56 @@ async def auto_generate_drafts(db: AsyncSession, job: ScanJob) -> dict:
         details={"job_id": str(job.id), "flow_id": str(flow.id), **summary},
     )
     return summary
+
+
+async def _models_used(db: AsyncSession, news: NewsItem) -> dict | None:
+    """Какие модели сделали отбор / факты / черновик — из последнего события ai_draft_generated."""
+    events = (
+        await db.scalars(
+            select(ActivityEvent)
+            .where(ActivityEvent.workspace_id == news.workspace_id, ActivityEvent.action == "ai_draft_generated")
+            .order_by(ActivityEvent.created_at.desc())
+            .limit(100)
+        )
+    ).all()
+    for event in events:
+        if (event.details or {}).get("news_id") == str(news.id):
+            return event.details.get("models")
+    return None
+
+
+async def get_source_view(db: AsyncSession, news: NewsItem, *, load_text: bool) -> dict:
+    """Вкладка «Исходный материал»: откуда взят материал, анонс, какие модели работали и —
+    по запросу — текст оригинала, загруженный с сайта прямо сейчас (тот же вход, что получает
+    модель). Текст оригинала НИГДЕ не сохраняется: source_policies не разрешают retain_full_text,
+    он показывается только редактору в этом ответе. Наружу (публичный предпросмотр, XML) не уходит."""
+    discovery = await db.get(Discovery, news.discovery_id) if news.discovery_id else None
+    meta = (discovery.metadata_json or {}) if discovery else {}
+    live = meta.get("label") == "LIVE_LISTING"
+    view: dict = {
+        "url": discovery.normalized_url if discovery else None,
+        "domain": news.discovery_domain,
+        "fragment": news.discovery_original_fragment,
+        "published": meta.get("published") or "",
+        "live": live,
+        "models": await _models_used(db, news),
+        "text": None,
+        "text_note": None,
+        "similarity": None,
+    }
+    if not load_text:
+        return view
+    if discovery is None or not live:
+        view["text_note"] = "Материал демонстрационный (DEMO_FIXTURE): оригинала на сайте нет."
+        return view
+    text = await fetch_article_text(discovery.normalized_url, domain=news.discovery_domain)
+    if not text:
+        view["text_note"] = (
+            "Не удалось загрузить текст: сайт недоступен, robots.txt запрещает автоматическое чтение "
+            "или изменилась вёрстка. Откройте оригинал по ссылке."
+        )
+        return view
+    view["text"] = text
+    if news.text:
+        view["similarity"] = text_overlap(news.text, text)
+    return view

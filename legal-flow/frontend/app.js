@@ -402,6 +402,8 @@
         : '<article class="article"><h2>' + esc(d.title) + '</h2>' + esc(d.text) + '</article>';
     } else if (tab === 'Источник обнаружения') {
       main = '<p class="notice warning">Внутренний раздел. Текст новостного сайта не переносится в публикацию.</p><div class="source-box"><strong>' + esc(d.discovery_domain) + '</strong><p>' + esc(d.discovery_original_fragment) + '</p></div>';
+    } else if (tab === 'Исходный материал') {
+      main = '<div id="source-slot"><p class="small">Загрузка…</p></div>';
     } else if (tab === 'Официальные источники') {
       main = officialBlock(d.official_document) + (state.access && state.access.can_mutate
         ? field('official-title', 'Название и реквизиты документа', 'text', d.official_document ? d.official_document.title : '') + field('official-url', 'Ссылка на официальный документ', 'url', d.official_document ? d.official_document.url : '') + field('official-requisites', 'Реквизиты (дело, дата)', 'text', d.official_document ? d.official_document.requisites : '') + button('Сохранить документ', 'saveOfficial')
@@ -415,7 +417,7 @@
     } else {
       main = '<div id="history-slot"><p class="small">Загрузка истории…</p></div>';
     }
-    return page(esc(d.title), '<p>' + button('← Новости', 'news') + ' · ' + badge(d.status) + '</p><div class="detail"><div class="card"><div class="tabs">' + ['Текст для публикации', 'Источник обнаружения', 'Официальные источники', 'Паспорт фактов', 'Предпросмотр для читателя', 'История'].map(function (v) { return '<button data-detail="' + v + '" class="' + (v === tab ? 'active' : '') + '">' + v + '</button>'; }).join('') + '</div>' + main + '</div><aside class="card"><h3>Редакторский контроль</h3><p>' + badge(d.status) + '</p><p class="small">Сайт обнаружения: ' + esc(d.discovery_domain) + ' — только редактору</p><p class="small">Официальный документ: ' + (d.official_document && d.official_document.url ? 'указан' : 'не указан') + '</p><p class="small">Реквизиты проверены: ' + (d.official_reviewed ? 'да' : 'нет') + '</p><p class="small">Факты проверены: ' + (d.facts_reviewed ? 'да' : 'нет') + '</p><p class="notice warning">Все решения — только вручную, автопубликации нет.</p><div style="display:grid;gap:9px">' + button(state.editingDraft ? 'Сохранить черновик' : 'Редактировать', state.editingDraft ? 'saveDraft' : 'edit') + (d.status === 'PUBLISHED' ? '' : button('Проверка редактором', 'review', 'secondary') + button('Утвердить материал', 'approve', 'primary') + (d.status === 'APPROVED' ? button('Опубликовать', 'publish', 'primary') : '') + button('Отклонить', 'reject')) + '</div></aside></div>');
+    return page(esc(d.title), '<p>' + button('← Новости', 'news') + ' · ' + badge(d.status) + '</p><div class="detail"><div class="card"><div class="tabs">' + ['Текст для публикации', 'Источник обнаружения', 'Исходный материал', 'Официальные источники', 'Паспорт фактов', 'Предпросмотр для читателя', 'История'].map(function (v) { return '<button data-detail="' + v + '" class="' + (v === tab ? 'active' : '') + '">' + v + '</button>'; }).join('') + '</div>' + main + '</div><aside class="card"><h3>Редакторский контроль</h3><p>' + badge(d.status) + '</p><p class="small">Сайт обнаружения: ' + esc(d.discovery_domain) + ' — только редактору</p><p class="small">Официальный документ: ' + (d.official_document && d.official_document.url ? 'указан' : 'не указан') + '</p><p class="small">Реквизиты проверены: ' + (d.official_reviewed ? 'да' : 'нет') + '</p><p class="small">Факты проверены: ' + (d.facts_reviewed ? 'да' : 'нет') + '</p><p class="notice warning">Все решения — только вручную, автопубликации нет.</p><div style="display:grid;gap:9px">' + button(state.editingDraft ? 'Сохранить черновик' : 'Редактировать', state.editingDraft ? 'saveDraft' : 'edit') + (d.status === 'PUBLISHED' ? '' : button('Проверка редактором', 'review', 'secondary') + button('Утвердить материал', 'approve', 'primary') + (d.status === 'APPROVED' ? button('Опубликовать', 'publish', 'primary') : '') + button('Отклонить', 'reject')) + '</div></aside></div>');
   }
 
   var SOURCE_KIND_LABELS = { builtin: 'готовый разбор сайта', feed: 'RSS/Atom-лента', sitemap: 'новостной sitemap', html: 'список статей (эвристика)' };
@@ -502,6 +504,7 @@
     if (p === '/app/detail' && state.detail) {
       if (state.detailTab === 'Предпросмотр для читателя') loadReaderPreview();
       if (state.detailTab === 'История') loadHistorySlot();
+      if (state.detailTab === 'Исходный материал') loadSourceSlot(false);
     }
   }
 
@@ -513,6 +516,39 @@
       slot.innerHTML = '<div class="reader"><p class="tag">Предпросмотр для читателя · как будет выглядеть на сайте</p><h1>' + esc(d.title) + '</h1><div class="article">' + esc(d.text) + '</div>' + officialBlock(d.official_document) + '<p class="small">Сайт обнаружения в публичной версии отсутствует.</p></div>';
     } catch (e) { toast(e.message, true); }
   }
+  var MODEL_STAGE_LABELS = { relevance: 'отбор по теме', facts: 'паспорт фактов', draft: 'черновик' };
+
+  function sourceSlotHtml(v) {
+    var d = state.detail, html = '';
+    html += '<p class="notice warning">Внутренний раздел для редактора. Текст оригинала загружается с сайта в момент просмотра, нигде не сохраняется и не попадает ни в публичный предпросмотр, ни в XML.</p>';
+    html += '<div class="source-box"><strong>' + esc(v.domain) + '</strong>' + (v.published ? ' <span class="small">· ' + esc(v.published) + '</span>' : '');
+    if (v.url && /^https?:\/\//i.test(v.url)) html += '<p><a href="' + esc(v.url) + '" target="_blank" rel="noopener noreferrer">Открыть оригинал на сайте ↗</a></p>';
+    html += '<p class="small">Анонс из списка:</p><p>' + esc(v.fragment) + '</p></div>';
+    if (v.models) html += '<p class="small">Кто работал: ' + Object.keys(v.models).map(function (k) { return (MODEL_STAGE_LABELS[k] || k) + ' — ' + esc(v.models[k] || '—'); }).join(' · ') + '</p>';
+    else html += '<p class="small">Черновик ИИ по этому материалу ещё не создавался (или создан до учёта моделей).</p>';
+    if (v.text) {
+      var sim = v.similarity;
+      if (sim) html += '<p class="notice' + (sim.warning ? ' warning' : '') + '">Совпадение с оригиналом: ' + Math.round(sim.share * 100) + '% четырёхсловных фраз черновика · самая длинная дословная цепочка — ' + sim.longest_run_words + ' сл.' + (sim.longest_run_text ? ' («' + esc(sim.longest_run_text) + '»)' : '') + (sim.warning ? '<br><strong>Текст слишком близок к оригиналу — перепишите его своими словами.</strong>' : '') + '</p>';
+      else html += '<p class="small">Черновика ещё нет — сравнивать не с чем.</p>';
+      html += '<div class="grid2"><div class="card"><h3>Оригинал (загружен сейчас)</h3><p style="white-space:pre-wrap">' + esc(v.text) + '</p></div><div class="card"><h3>Ваш черновик</h3><p style="white-space:pre-wrap">' + esc(d.text || '— пока пусто —') + '</p></div></div>';
+    } else {
+      if (v.text_note) html += '<p class="notice warning">' + esc(v.text_note) + '</p>';
+      html += button('Загрузить текст оригинала', 'loadSource', 'secondary');
+    }
+    return html;
+  }
+
+  async function loadSourceSlot(full) {
+    var slot = document.getElementById('source-slot');
+    if (!slot || !state.detail) return;
+    try {
+      if (full) slot.innerHTML = '<p class="small">Загружаем текст оригинала с сайта…</p>';
+      var view = await api('/api/v1/news/' + state.detail.id + '/source' + (full ? '?full=true' : ''));
+      slot = document.getElementById('source-slot');
+      if (slot) slot.innerHTML = sourceSlotHtml(view);
+    } catch (e) { toast(e.message, true); }
+  }
+
   async function loadHistorySlot() {
     try {
       var events = await api('/api/v1/activity?limit=200');
@@ -743,6 +779,7 @@
         }
         state.setupStep++; return render();
       }
+      if (a === 'loadSource') { await loadSourceSlot(true); return; }
       if (a === 'edit') { if (!gate()) return; state.editingDraft = true; state.detailTab = 'Текст для публикации'; return render(); }
       if (a === 'saveDraft') {
         if (!gate()) return;

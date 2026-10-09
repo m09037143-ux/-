@@ -259,7 +259,11 @@ async def process_scan_job(db: AsyncSession, job_id: uuid.UUID) -> ScanJob:
                 is_duplicate=is_dup,
                 duplicate_of_news_id=None,
                 decision_reason=decision_reason,
-                metadata_json={"label": item.label, "relevance_reasoning": relevance_reasoning} if relevance_reasoning else {"label": item.label},
+                metadata_json={
+                    "label": item.label,
+                    "published": (item.metadata or {}).get("published", ""),
+                    **({"relevance_reasoning": relevance_reasoning} if relevance_reasoning else {}),
+                },
             )
             db.add(discovery)
             await db.flush()

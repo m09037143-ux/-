@@ -8,6 +8,7 @@ from app.db import get_db
 from app.deps import get_current_membership, get_current_user, require_active_access, require_csrf, require_role
 from app.errors import AppError
 from app.models import Membership, NewsItem, OfficialDocument, User
+from app.config import get_settings
 from app.models.enums import NewsStatus, Role
 from app.schemas.news import (
     NewsItemOut,
@@ -15,12 +16,14 @@ from app.schemas.news import (
     PublicNewsOut,
     OfficialDocumentOut,
     RejectRequest,
+    SourceViewOut,
     ReviewRequest,
     UpdateDraftRequest,
     UpdateFactsRequest,
     UpdateOfficialDocumentRequest,
 )
-from app.services import news_service
+from app.services import ai_service, news_service
+from app.services.rate_limit import enforce_rate_limit
 
 router = APIRouter(prefix="/api/v1", tags=["news"])
 _EDIT_ROLES = (Role.workspace_owner, Role.editor)
@@ -69,6 +72,21 @@ async def get_news(
 ):
     news = await news_service.get_owned_news(db, workspace_id=membership.workspace_id, news_id=news_id)
     return await news_service.to_internal_out(db, news)
+
+
+@router.get("/news/{news_id}/source", response_model=SourceViewOut)
+async def get_news_source(
+    news_id: uuid.UUID,
+    full: bool = Query(default=False, description="true — загрузить текст оригинала с сайта (не сохраняется)"),
+    membership: Membership = Depends(get_current_membership),
+    db: AsyncSession = Depends(get_db),
+):
+    news = await news_service.get_owned_news(db, workspace_id=membership.workspace_id, news_id=news_id)
+    if full:
+        await enforce_rate_limit(
+            "news_source", str(membership.workspace_id), get_settings().rate_limit_news_source_per_hour, 3600
+        )
+    return await ai_service.get_source_view(db, news, load_text=full)
 
 
 @router.patch("/news/{news_id}/draft", response_model=NewsItemOut, dependencies=[Depends(require_csrf)])
