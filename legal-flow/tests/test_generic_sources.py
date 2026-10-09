@@ -383,3 +383,30 @@ async def test_article_text_for_generic_site_respects_robots_and_same_site(monke
     _allow(monkeypatch, True)
     assert await fetch_article_text("https://evil.com/x", domain="example.ru") is None  # чужой сайт
     assert web.calls == []
+
+
+# ---------------- повторное подключение уже добавленного сайта ----------------
+
+@pytest.mark.asyncio
+async def test_changing_to_same_domain_reonboards_legacy_site_only_when_needed(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.services import flow_service
+    from app.services.source_onboarding import OnboardResult
+
+    calls = []
+
+    async def fake_onboard(db, *, domain, confirmed, confirmed_by):
+        calls.append((domain, confirmed))
+        return OnboardResult("feed", f"https://{domain}/rss", "ready", robots_checked=True)
+
+    monkeypatch.setattr(flow_service, "onboard_source", fake_onboard)
+    legacy = SimpleNamespace(domain="rapsinews.ru", kind=None, list_url=None, status="ready", status_note="", rights_confirmed_by="")
+    await flow_service.change_source_domain(None, site=legacy, domain="rapsinews.ru", rights_confirmed=True, confirmed_by="u1")
+    assert calls == [("rapsinews.ru", True)]
+    assert (legacy.kind, legacy.list_url, legacy.rights_confirmed_by) == ("feed", "https://rapsinews.ru/rss", "u1")
+
+    calls.clear()  # уже подключён и подтверждения нет — повторно не ходим в сеть
+    await flow_service.change_source_domain(None, site=legacy, domain="rapsinews.ru")
+    assert calls == []
+

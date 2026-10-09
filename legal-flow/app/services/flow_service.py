@@ -130,7 +130,9 @@ async def change_source_domain(
 ) -> None:
     """Смена адреса — это другой сайт: заново проверяем robots.txt и способ сбора."""
     domain = validate_domain(domain)
-    if domain == site.domain:
+    # Тот же адрес пропускаем, только если сайт уже подключён и подтверждение не передаётся;
+    # иначе (сайт добавлен до появления автоподключения или без способа сбора) — подключаем заново.
+    if domain == site.domain and not rights_confirmed and site.status == "ready" and site.kind:
         return
     result = await _onboard(db, domain=domain, confirmed=rights_confirmed, confirmed_by=confirmed_by)
     site.domain = domain
