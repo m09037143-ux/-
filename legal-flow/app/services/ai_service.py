@@ -84,7 +84,10 @@ async def generate_ai_draft(db: AsyncSession, *, news: NewsItem, expected_versio
 
     await log_activity(
         db, workspace_id=news.workspace_id, action="ai_draft_generated",
-        details={"news_id": str(news.id), "is_relevant": relevance.is_relevant, "reasoning": relevance.reasoning},
+        details={
+            "news_id": str(news.id), "is_relevant": relevance.is_relevant, "reasoning": relevance.reasoning,
+            "models": {"relevance": relevance.model_used, "facts": facts.model_used, "draft": draft.model_used},
+        },
     )
     return {
         "relevance": relevance.model_dump(),

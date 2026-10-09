@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     llm_fixture_mode: bool = True
     llm_token_budget_per_workspace_day: int = 200_000
     llm_timeout_seconds: float = 30.0
+    # Лимит токенов в ответе модели. 2000 обрезало JSON на длинных статьях (25 фактов).
+    llm_max_tokens: int = 4000
+    # Запасная модель ТОЛЬКО на случай отказа основной (фильтр YandexGPT на чувствительные
+    # темы: «Я не могу обсуждать эту тему»). Пусто — запасной модели нет. Значение должно быть
+    # из явного списка разрешённых в app/providers/yandex_gpt.py; тот же ключ и каталог Яндекса.
+    llm_fallback_model: str = ""
 
     payment_provider: str = "not_configured"
     payment_webhook_secret: str = ""

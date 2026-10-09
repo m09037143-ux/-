@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 
 import httpx
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import func, select
 
 from app.config import Settings, get_settings
@@ -16,11 +16,18 @@ PROMPT_VERSION = "v1"
 
 # ТЗ §10: единственная разрешённая модель. Никогда не заменяется тихо на другую.
 _EXPECTED_PROVIDER = "yandexgpt_pro_5_1"
+_PRIMARY_MODEL = "yandexgpt-5.1"
+
+# Запасная модель включается только явной настройкой LLM_FALLBACK_MODEL и только из этого
+# списка (открытые модели, размещённые в том же облаке Яндекса). Любое другое значение —
+# ошибка конфигурации, а не молчаливая подмена (ТЗ §10).
+ALLOWED_FALLBACK_MODELS = frozenset({"deepseek-v4-flash"})
 
 
 class RelevanceResult(BaseModel):
     is_relevant: bool
     reasoning: str
+    model_used: str | None = Field(default=None, exclude=True)
 
 
 class FactStatement(BaseModel):
@@ -31,17 +38,20 @@ class FactStatement(BaseModel):
 
 class FactPassportResult(BaseModel):
     statements: list[FactStatement]
+    model_used: str | None = Field(default=None, exclude=True)
 
 
 class DraftResult(BaseModel):
     title: str
     text: str
+    model_used: str | None = Field(default=None, exclude=True)
 
 
 class CritiqueResult(BaseModel):
     unconfirmed_claims: list[str]
     distortions: list[str]
     similarity_concerns: list[str]
+    model_used: str | None = Field(default=None, exclude=True)
 
 
 class LlmStageError(Exception):
@@ -119,7 +129,7 @@ class YandexGPTPro51Provider:
         }
         body = {
             "modelUri": self.settings.yandex_model_uri,
-            "completionOptions": {"stream": False, "temperature": 0.2, "maxTokens": "2000"},
+            "completionOptions": {"stream": False, "temperature": 0.2, "maxTokens": str(self.settings.llm_max_tokens)},
             "messages": [{"role": "user", "text": prompt}],
         }
         async with httpx.AsyncClient(timeout=self.settings.llm_timeout_seconds) as client:
@@ -127,6 +137,35 @@ class YandexGPTPro51Provider:
             resp.raise_for_status()
             data = resp.json()
         return data["result"]["alternatives"][0]["message"]["text"]
+
+    def _fallback_model(self) -> str | None:
+        model = (self.settings.llm_fallback_model or "").strip()
+        if not model:
+            return None
+        if model not in ALLOWED_FALLBACK_MODELS:
+            raise AppError(
+                "LLM_NOT_CONFIGURED",
+                f"LLM_FALLBACK_MODEL={model!r} не входит в список разрешённых запасных моделей "
+                f"({', '.join(sorted(ALLOWED_FALLBACK_MODELS))}).",
+            )
+        return model
+
+    async def _call_fallback_model(self, *, prompt: str, stage: str, model: str) -> str:
+        """Запасная модель в том же облаке и под тем же ключом, но через OpenAI-совместимый
+        эндпоинт Яндекса (открытые модели недоступны в нативном API)."""
+        url = "https://llm.api.cloud.yandex.net/v1/chat/completions"
+        headers = {"Authorization": f"Api-Key {self.settings.yandex_api_key}"}
+        body = {
+            "model": f"gpt://{self.settings.yandex_folder_id}/{model}",
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.2,
+            "max_tokens": self.settings.llm_max_tokens,
+        }
+        async with httpx.AsyncClient(timeout=self.settings.llm_timeout_seconds) as client:
+            resp = await client.post(url, headers=headers, json=body)
+            resp.raise_for_status()
+            data = resp.json()
+        return data["choices"][0]["message"].get("content") or ""
 
     async def _enforce_daily_budget(self, db, *, workspace_id: uuid.UUID) -> None:
         today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -142,7 +181,7 @@ class YandexGPTPro51Provider:
                 f"{self.settings.llm_token_budget_per_workspace_day}).",
             )
 
-    async def _run_stage(
+    async def _attempt(
         self,
         db,
         *,
@@ -152,34 +191,43 @@ class YandexGPTPro51Provider:
         prompt: str,
         result_model: type[BaseModel],
         fixture_response: dict,
-    ) -> BaseModel:
-        use_fixture = self._require_configured_or_fixture()
-        await self._enforce_daily_budget(db, workspace_id=workspace_id)
+        use_fixture: bool,
+        fallback_model: str | None,
+    ) -> tuple[BaseModel | None, bool, str]:
+        """Один вызов модели (основной или запасной) + строка в llm_calls. Возвращает
+        (результат или None, «модель отказалась», текст ошибки)."""
         request_id = str(uuid.uuid4())
         started = time.monotonic()
         error = ""
         raw_text = ""
         refused = False
-        model_uri_logged = f"FIXTURE:{self.settings.yandex_model_uri or 'yandexgpt-5.1'}"
+        parsed = None
+        model_name = fallback_model or _PRIMARY_MODEL
+        if use_fixture:
+            model_uri_logged = f"FIXTURE:{self.settings.yandex_model_uri or 'yandexgpt-5.1'}"
+        elif fallback_model:
+            model_uri_logged = f"gpt://{self.settings.yandex_folder_id}/{fallback_model}"
+        else:
+            model_uri_logged = self.settings.yandex_model_uri
 
         try:
             if use_fixture:
                 raw_text = json.dumps(fixture_response, ensure_ascii=False)
+            elif fallback_model:
+                raw_text = await self._call_fallback_model(prompt=prompt, stage=stage, model=fallback_model)
             else:
-                model_uri_logged = self.settings.yandex_model_uri
                 raw_text = await self._call_real_model(prompt=prompt, stage=stage)
             if not use_fixture and _looks_like_refusal(raw_text):
                 refused = True
                 error = "model_refused: модель отказалась обрабатывать материал"
-                parsed = None
             else:
                 parsed = result_model.model_validate_json(_strip_markdown_json_fence(raw_text))
+                parsed.model_used = "FIXTURE" if use_fixture else model_name
         except (ValidationError, json.JSONDecodeError, KeyError) as exc:
             error = f"invalid_json_or_schema: {exc}"
-            parsed = None
         except httpx.HTTPError as exc:
-            error = f"http_error: {exc}"
-            parsed = None
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            error = f"http_error: {type(exc).__name__}{f' HTTP {status}' if status else ''} {exc}".strip()
 
         duration_ms = int((time.monotonic() - started) * 1000)
         db.add(
@@ -200,19 +248,50 @@ class YandexGPTPro51Provider:
             )
         )
         await db.commit()
+        return parsed, refused, error
+
+    async def _run_stage(
+        self,
+        db,
+        *,
+        workspace_id: uuid.UUID,
+        news_item_id: uuid.UUID | None,
+        stage: str,
+        prompt: str,
+        result_model: type[BaseModel],
+        fixture_response: dict,
+    ) -> BaseModel:
+        """Основная модель — YandexGPT Pro 5.1. Только если она ОТКАЗАЛАСЬ отвечать (фильтр
+        на чувствительные темы) и явно задана LLM_FALLBACK_MODEL, тот же запрос повторяется
+        на запасной модели. Оба вызова пишутся в llm_calls с точным URI модели; результат
+        помечен model_used. Ошибки формата/сети запасной моделью НЕ «лечатся»."""
+        use_fixture = self._require_configured_or_fixture()
+        fallback_model = None if use_fixture else self._fallback_model()
+        await self._enforce_daily_budget(db, workspace_id=workspace_id)
+
+        common = dict(
+            workspace_id=workspace_id, news_item_id=news_item_id, stage=stage, prompt=prompt,
+            result_model=result_model, fixture_response=fixture_response, use_fixture=use_fixture,
+        )
+        parsed, refused, error = await self._attempt(db, fallback_model=None, **common)
+        if parsed is not None:
+            return parsed
+
+        if refused and fallback_model:
+            parsed, refused, error = await self._attempt(db, fallback_model=fallback_model, **common)
+            if parsed is not None:
+                return parsed
 
         if refused:
             raise AppError(
                 "VALIDATION_ERROR",
-                "ИИ (YandexGPT) отказался обрабатывать этот материал — вероятно, из-за чувствительной "
+                "ИИ отказался обрабатывать этот материал — вероятно, из-за чувствительной "
                 "темы (например, санкции или политика). Заполните текст вручную или отклоните материал.",
             )
-        if parsed is None:
-            raise AppError(
-                "VALIDATION_ERROR",
-                f"Ответ модели на этапе {stage!r} не прошёл проверку структуры: {error}",
-            )
-        return parsed
+        raise AppError(
+            "VALIDATION_ERROR",
+            f"Ответ модели на этапе {stage!r} не прошёл проверку структуры: {error}",
+        )
 
     async def check_relevance(self, db, *, workspace_id: uuid.UUID, news_item_id: uuid.UUID | None, title: str, theme: str) -> RelevanceResult:
         prompt = (
