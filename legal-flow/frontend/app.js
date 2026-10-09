@@ -96,6 +96,9 @@
     scanJobStatus: null,
     scanJobProgress: 0,
     scanJobProviderName: null,
+    scanJobId: null,
+    scanJobWatching: false,
+    newsSignature: '',
     exportsList: [],
     publishedCount: 0,
     activityList: [],
@@ -324,6 +327,8 @@
       : state.scanJobProviderName === 'html'
         ? 'Последний запуск: реальный сбор с сайтов потока.'
         : 'Сбор идёт по ленте каждого сайта потока (RSS, sitemap или список статей); демонстрационные материалы DEMO_FIXTURE — только в демо-режиме сервера.';
+    var pend = draftsPending().length;
+    if (pend && !jobActive()) label += ' · готовятся черновики: осталось ' + pend;
     return '<div class="card"><h3>Фоновая задача сбора</h3><p>' + label + '</p><div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + state.scanJobProgress + '"><span style="width:' + state.scanJobProgress + '%"></span></div><p class="small" style="margin-top:15px">' + providerNote + '</p>' + button(state.flow ? 'Настроить поток' : 'Создать поток', 'setup') + '</div>';
   }
 
@@ -395,7 +400,8 @@
         && (state.newsSourceFilter === 'Все' || x.discovery_domain === state.newsSourceFilter);
     });
     return list.length ? '<table class="table"><thead><tr><th>Материал</th><th>Источник обнаружения</th><th>Официальный документ</th><th>Совпадение</th><th>Статус</th><th>Действие</th></tr></thead><tbody>' + list.map(function (x) {
-      return '<tr><td>' + esc(x.title) + '</td><td>' + esc(x.discovery_domain) + '</td><td>' + (x.has_official_document ? 'Указан' : 'Не указан') + '</td><td>' + overlapBadge(x.source_overlap) + '</td><td>' + badge(x.status) + '</td><td>' + button('Открыть', 'open', '', 'data-id="' + x.id + '"') + '</td></tr>';
+      var pendingMark = (x.status === 'DISCOVERED' && !x.has_draft && state.flow && state.flow.auto_draft !== false && Date.now() - new Date(x.created_at).getTime() < RECENT_MS) ? '<br><span class="small">⏳ черновик готовится…</span>' : '';
+      return '<tr><td>' + esc(x.title) + pendingMark + '</td><td>' + esc(x.discovery_domain) + '</td><td>' + (x.has_official_document ? 'Указан' : 'Не указан') + '</td><td>' + overlapBadge(x.source_overlap) + '</td><td>' + badge(x.status) + '</td><td>' + button('Открыть', 'open', '', 'data-id="' + x.id + '"') + '</td></tr>';
     }).join('') + '</tbody></table>' : '<p>По выбранным фильтрам материалов нет.</p>';
   }
 
@@ -681,27 +687,11 @@
     if (!state.flow) { toast('Сначала настройте поток'); return; }
     modal('Запустить сбор?', '<p>Будет запущено фоновое задание сбора материалов по источникам потока.</p>', 'Запустить', async function () {
       try {
-        state.scanJobStatus = 'pending'; state.scanJobProgress = 15; render();
+        state.scanJobStatus = 'pending'; state.scanJobProgress = 15; state.scanJobWatching = true; render();
         var job = await api('/api/v1/flows/' + state.flow.id + '/scan-jobs', { method: 'POST', headers: { 'Idempotency-Key': uuid() } });
-        var providerName = job.provider_name;
-        state.scanJobProviderName = providerName;
-        for (var i = 0; i < 40; i++) {
-          job = await api('/api/v1/scan-jobs/' + job.id);
-          state.scanJobStatus = job.status;
-          state.scanJobProgress = job.status === 'done' ? 100 : job.status === 'failed' ? 100 : job.status === 'running' ? 70 : Math.min(60, 15 + i * 3);
-          render();
-          if (job.status === 'done' || job.status === 'failed') break;
-          await sleep(700);
-        }
-        if (job.status === 'done') {
-          var providerNote = providerName === 'fixture' ? ' (демонстрационные материалы — DEMO_FIXTURE, настоящие сайты не анализировались)' : '';
-          var msg = 'Сбор завершён: добавлено материалов — ' + job.created_news_ids.length + providerNote;
-          if (job.created_news_ids.length === 0 && job.duplicate_count > 0) {
-            msg = 'Сбор завершён: новых материалов нет — все ' + job.duplicate_count + ' найденных уже собраны ранее (см. «Новости»)' + providerNote + '.';
-          }
-          toast(msg); await loadNews(); render();
-        }
-        else if (job.status === 'failed') toast('Задание завершилось с ошибкой: ' + (job.error || ''), true);
+        state.scanJobProviderName = job.provider_name; state.scanJobId = job.id;
+        toast('Сбор запущен: страница обновится сама, когда задание завершится');
+        pollNow();
       } catch (e) { toast(e.message, true); }
     });
   }
@@ -1003,10 +993,74 @@
   // ---------------------------------------------------------------------
   // Загрузка приложения
   // ---------------------------------------------------------------------
+  // ---------- Фоновое обновление без перезагрузки страницы ----------
+  // Пока открыта страница «Обзор», «Новости» или карточка материала: следим за последним заданием
+  // сбора (часто, пока оно идёт), подтягиваем новые материалы и готовые черновики, а когда всё
+  // тихо — спрашиваем редко. Страница перерисовывается только если данные изменились и вы
+  // ничего не вводите (открытое окно, поле ввода или редактирование черновика не прерываются).
+  var POLL_FAST_MS = 2500, POLL_DRAFTS_MS = 8000, POLL_IDLE_MS = 30000, RECENT_MS = 30 * 60 * 1000;
+  var pollTimer = null, pollRunning = false;
+
+  function isUserBusy() {
+    var tag = ((document.activeElement || {}).tagName || '').toUpperCase();
+    return !!modalRoot.firstChild || state.editingDraft || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+  }
+  function draftsPending() {
+    if (!state.flow || state.flow.auto_draft === false) return [];
+    var now = Date.now();
+    return (state.news || []).filter(function (x) { return x.status === 'DISCOVERED' && !x.has_draft && now - new Date(x.created_at).getTime() < RECENT_MS; });
+  }
+  function newsSignature(list) {
+    return JSON.stringify((list || []).map(function (x) { return [x.id, x.status, x.has_draft, x.has_official_document, x.source_overlap ? x.source_overlap.share : null]; }));
+  }
+  function jobActive() { return state.scanJobStatus === 'pending' || state.scanJobStatus === 'running'; }
+  function pollDelay() { return jobActive() ? POLL_FAST_MS : draftsPending().length ? POLL_DRAFTS_MS : POLL_IDLE_MS; }
+
+  async function pollOnce() {
+    if (pollRunning || document.hidden || !state.user || !state.flow) return;
+    if (['/app', '/app/news', '/app/detail'].indexOf(state.route) === -1) return;
+    pollRunning = true;
+    try {
+      var changed = false;
+      var job = await api('/api/v1/flows/' + state.flow.id + '/scan-jobs/latest');
+      if (job) {
+        var was = state.scanJobStatus, wasActive = jobActive();
+        var progress = job.status === 'done' || job.status === 'failed' ? 100 : job.status === 'running' ? 70 : 25;
+        if (job.status !== state.scanJobStatus || progress !== state.scanJobProgress || job.provider_name !== state.scanJobProviderName) changed = true;
+        state.scanJobStatus = job.status; state.scanJobProgress = progress; state.scanJobProviderName = job.provider_name; state.scanJobId = job.id;
+        if ((wasActive || state.scanJobWatching) && (job.status === 'done' || job.status === 'failed')) {
+          state.scanJobWatching = false;
+          if (job.status === 'failed') toast('Задание завершилось с ошибкой: ' + (job.error || ''), true);
+          else {
+            var demo = job.provider_name === 'fixture' ? ' (демонстрационные материалы — DEMO_FIXTURE)' : '';
+            toast(job.created_news_ids.length === 0 && job.duplicate_count > 0
+              ? 'Сбор завершён: новых материалов нет — все ' + job.duplicate_count + ' найденных уже собраны ранее' + demo + '.'
+              : 'Сбор завершён: добавлено материалов — ' + job.created_news_ids.length + demo + (job.created_news_ids.length && state.flow.auto_draft !== false ? '. Черновики готовятся автоматически.' : ''));
+          }
+        }
+      }
+      if (jobActive() || draftsPending().length || changed || state.scanJobWatching || state.newsSignature === '') {
+        await loadNews();
+        var sig = newsSignature(state.news);
+        if (sig !== state.newsSignature) { state.newsSignature = sig; changed = true; }
+      }
+      if (state.route === '/app/detail' && state.detail && !state.detail.text && state.detail.status === 'DISCOVERED') {
+        var fresh = await api('/api/v1/news/' + state.detail.id);
+        if (fresh.version !== state.detail.version || fresh.text !== state.detail.text) { state.detail = fresh; changed = true; }
+      }
+      if (changed && !isUserBusy()) render();
+    } catch (e) { /* временный сбой сети — попробуем в следующий раз, пользователю не мешаем */ }
+    finally { pollRunning = false; }
+  }
+  function pollNow() { clearTimeout(pollTimer); pollOnce().then(scheduleNextPoll); }
+  function scheduleNextPoll() { clearTimeout(pollTimer); pollTimer = setTimeout(function () { pollOnce().then(scheduleNextPoll); }, pollDelay()); }
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) pollNow(); });
+
   async function boot() {
     try {
       state.user = await api('/api/v1/auth/me');
       go('/app');
+      scheduleNextPoll();
     } catch (e) {
       go('/');
     }

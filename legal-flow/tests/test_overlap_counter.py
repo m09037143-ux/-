@@ -151,3 +151,15 @@ def test_api_schemas_accept_stored_overlap():
     )
     assert item.source_overlap.basis == "generation"
     assert "source_overlap" in NewsItemOut.model_fields
+
+
+def test_list_item_schema_and_latest_job_route_for_auto_refresh():
+    """Фоновое обновление страницы опирается на has_draft в списке и на «последнее задание потока»."""
+    from app.main import create_app
+
+    item = NewsListItemOut(
+        id=uuid.uuid4(), title="Т", discovery_domain="pravo.ru", status="DISCOVERED", has_official_document=False,
+        has_draft=True, created_at="2026-10-09T10:00:00+00:00",
+    )
+    assert item.has_draft is True
+    assert "/api/v1/flows/{flow_id}/scan-jobs/latest" in create_app().openapi()["paths"]

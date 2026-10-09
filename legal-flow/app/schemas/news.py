@@ -57,6 +57,7 @@ class NewsListItemOut(BaseModel):
     discovery_domain: str
     status: str
     has_official_document: bool
+    has_draft: bool = False
     source_overlap: SourceOverlapOut | None = None
     created_at: datetime
 

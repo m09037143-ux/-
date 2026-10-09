@@ -58,7 +58,7 @@ async def list_news(
         out.append(
             NewsListItemOut(
                 id=n.id, title=n.title, discovery_domain=n.discovery_domain,
-                status=n.status.value, has_official_document=has_doc, source_overlap=n.source_overlap, created_at=n.created_at,
+                status=n.status.value, has_official_document=has_doc, has_draft=bool(n.text), source_overlap=n.source_overlap, created_at=n.created_at,
             )
         )
     return out

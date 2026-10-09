@@ -228,6 +228,30 @@ async def create_scan_job(
     )
 
 
+@router.get("/flows/{flow_id}/scan-jobs/latest", response_model=ScanJobOut | None)
+async def get_latest_scan_job(
+    flow_id: uuid.UUID,
+    membership: Membership = Depends(get_current_membership),
+    db: AsyncSession = Depends(get_db),
+):
+    """Последнее задание сбора потока — по нему страница сама следит за ходом сбора."""
+    flow = await _get_owned_flow(db, membership, flow_id)
+    job = await db.scalar(select(ScanJob).where(ScanJob.flow_id == flow.id).order_by(ScanJob.created_at.desc()).limit(1))
+    if job is None:
+        return None
+    return ScanJobOut(
+        id=job.id,
+        flow_id=job.flow_id,
+        status=job.status.value,
+        provider_name=job.provider_name,
+        created_news_ids=job.created_news_ids,
+        duplicate_count=await _duplicate_count(db, job.id),
+        error=job.error,
+        created_at=job.created_at,
+        finished_at=job.finished_at,
+    )
+
+
 @router.get("/scan-jobs/{job_id}", response_model=ScanJobOut)
 async def get_scan_job(
     job_id: uuid.UUID,
