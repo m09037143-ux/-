@@ -4,16 +4,35 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Discovery, FactPassport, NewsItem
+from app.errors import AppError
+from app.models import Discovery, FactPassport, NewsFlow, NewsItem
 from app.models.enums import FactStatus
 from app.providers.html_source import SUPPORTED_DOMAINS as HTML_SUPPORTED_DOMAINS, fetch_article_text
-from app.providers.yandex_gpt import YandexGPTPro51Provider
+from app.providers.yandex_gpt import RelevanceResult, YandexGPTPro51Provider
 from app.services import news_service
 from app.services.activity_service import log_activity
 
 logger = logging.getLogger("app.services.ai_service")
 
 _provider = YandexGPTPro51Provider()
+
+
+async def _check_relevance_informational(db: AsyncSession, *, news: NewsItem) -> RelevanceResult:
+    """Только для журнала активности (ai_draft_generated) — ничто здесь не блокирует
+    и не гейтит генерацию черновика на этом результате (фактический отбор по теме
+    делается раньше, на этапе сбора — см. scan_service.process_scan_job). Поэтому
+    отказ модели (не-JSON ответ — например, встроенный отказ отвечать на чувствительную
+    тему — или бюджет/конфигурация) не должен ломать остальной черновик: ловим
+    AppError и возвращаем нейтральный результат."""
+    flow = await db.get(NewsFlow, news.flow_id)
+    theme = flow.theme if flow else news.title
+    try:
+        return await _provider.check_relevance(
+            db, workspace_id=news.workspace_id, news_item_id=news.id, title=news.title, theme=theme
+        )
+    except AppError as exc:
+        logger.warning("news %s: relevance check failed (%s), черновик продолжает без неё: %s", news.id, exc.code, exc.message)
+        return RelevanceResult(is_relevant=True, reasoning=f"проверка недоступна: {exc.code}")
 
 
 async def _fact_source_fragment(db: AsyncSession, news: NewsItem) -> str:
@@ -44,9 +63,7 @@ async def generate_ai_draft(db: AsyncSession, *, news: NewsItem, expected_versio
     sets official_reviewed/facts_reviewed or advances past NEEDS_REVIEW — a human editor
     still has to check it (ТЗ §10: 'самокритика той же модели не является независимой
     юридической проверкой', and only a human review can set those flags)."""
-    relevance = await _provider.check_relevance(
-        db, workspace_id=news.workspace_id, news_item_id=news.id, title=news.title, theme=news.title
-    )
+    relevance = await _check_relevance_informational(db, news=news)
     source_fragment = await _fact_source_fragment(db, news)
     facts = await _provider.build_fact_passport(
         db, workspace_id=news.workspace_id, news_item_id=news.id, source_fragment=source_fragment
