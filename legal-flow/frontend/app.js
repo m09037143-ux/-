@@ -119,7 +119,7 @@
   var root = document.getElementById('root'), modalRoot = document.getElementById('modal-root');
   var focusBefore = null, confirmFn = null;
 
-  function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function value(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; }
 
   function toast(msg, isError) {

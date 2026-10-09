@@ -115,3 +115,13 @@ async def test_daily_token_budget_is_enforced(authed):
         assert exc_info.value.code == "LLM_BUDGET_EXCEEDED"
     finally:
         settings.llm_token_budget_per_workspace_day = original_budget
+
+
+def test_refusal_phrase_is_recognized_but_real_json_is_not():
+    from app.providers.yandex_gpt import _looks_like_refusal
+
+    assert _looks_like_refusal("Я не могу обсуждать эту тему. Давайте поговорим о чём-нибудь ещё.")
+    assert _looks_like_refusal("  я не могу обсуждать эту тему")
+    assert not _looks_like_refusal('{"is_relevant": true, "reasoning": "Давайте поговорим о чём-нибудь ещё"}')
+    assert not _looks_like_refusal("```json\n{}\n```")
+    assert not _looks_like_refusal("")

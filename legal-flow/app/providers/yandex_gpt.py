@@ -64,6 +64,25 @@ def _strip_markdown_json_fence(text: str) -> str:
     return stripped
 
 
+# YandexGPT на чувствительные темы (санкции, политика и т.п.) отвечает не JSON-ом, а
+# стандартной фразой-отказом — это не сбой формата, и пользователю нужно сказать об
+# этом прямо, а не показывать текст про JSON-схему.
+_REFUSAL_MARKERS = (
+    "не могу обсуждать эту тему",
+    "не могу говорить на эту тему",
+    "давайте поговорим о чём-нибудь ещё",
+    "давайте поговорим о чем-нибудь еще",
+)
+
+
+def _looks_like_refusal(text: str) -> bool:
+    stripped = text.strip()
+    if stripped.startswith(("{", "[", "```")):
+        return False
+    low = stripped.lower()
+    return any(marker in low for marker in _REFUSAL_MARKERS)
+
+
 class YandexGPTPro51Provider:
     """Единственный провайдер ИИ в MVP (ТЗ §10). Каждый вызов — новая HTTP-сессия,
     все параметры модели берутся из настроек сервера, ключ никогда не логируется."""
@@ -140,6 +159,7 @@ class YandexGPTPro51Provider:
         started = time.monotonic()
         error = ""
         raw_text = ""
+        refused = False
         model_uri_logged = f"FIXTURE:{self.settings.yandex_model_uri or 'yandexgpt-5.1'}"
 
         try:
@@ -148,7 +168,12 @@ class YandexGPTPro51Provider:
             else:
                 model_uri_logged = self.settings.yandex_model_uri
                 raw_text = await self._call_real_model(prompt=prompt, stage=stage)
-            parsed = result_model.model_validate_json(_strip_markdown_json_fence(raw_text))
+            if not use_fixture and _looks_like_refusal(raw_text):
+                refused = True
+                error = "model_refused: модель отказалась обрабатывать материал"
+                parsed = None
+            else:
+                parsed = result_model.model_validate_json(_strip_markdown_json_fence(raw_text))
         except (ValidationError, json.JSONDecodeError, KeyError) as exc:
             error = f"invalid_json_or_schema: {exc}"
             parsed = None
@@ -176,6 +201,12 @@ class YandexGPTPro51Provider:
         )
         await db.commit()
 
+        if refused:
+            raise AppError(
+                "VALIDATION_ERROR",
+                "ИИ (YandexGPT) отказался обрабатывать этот материал — вероятно, из-за чувствительной "
+                "темы (например, санкции или политика). Заполните текст вручную или отклоните материал.",
+            )
         if parsed is None:
             raise AppError(
                 "VALIDATION_ERROR",
