@@ -1,4 +1,5 @@
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -6,7 +7,7 @@ from app.db import get_session_factory
 from app.models import Discovery, NewsItem, ScanJob, Story
 from app.models.enums import NewsStatus, ScanJobStatus
 from app.providers import html_source
-from app.providers.html_source import extract_visible_text, fetch_article_text
+from app.providers.html_source import ARTICLE_PARSERS, extract_visible_text, fetch_article_text
 from app.providers.http_fetch import AccessLimitedError, FetchResult
 from app.services.ai_service import _fact_source_fragment
 from tests.conftest import unique_email
@@ -36,7 +37,8 @@ async def test_fetch_article_text_returns_parsed_text(monkeypatch):
         return FetchResult(url, 200, "text/html; charset=utf-8", "<p>Полный текст статьи.</p>".encode("utf-8"))
 
     monkeypatch.setattr(html_source, "fetch_url", fake_fetch)
-    text = await fetch_article_text("https://www.garant.ru/news/1/", domain="garant.ru")
+    # домен без записи в ARTICLE_PARSERS — работает запасной extract_visible_text
+    text = await fetch_article_text("https://example.com/news/1/", domain="example.com")
     assert text == "Полный текст статьи."
 
 
@@ -131,9 +133,81 @@ async def test_fact_source_fragment_skips_fetch_for_unsupported_domain(authed, m
     import app.services.ai_service as ai_service
     monkeypatch.setattr(ai_service, "fetch_article_text", fake_fetch_article_text)
 
-    news_id, _ = await _seed_news_item(authed, domain="consultant.ru")
+    news_id, _ = await _seed_news_item(authed, domain="example.com")
     factory = get_session_factory()
     async with factory() as db:
         news = await db.get(NewsItem, news_id)
         fragment = await _fact_source_fragment(db, news)
     assert fragment == "короткий анонс"
+
+
+# --- точный разбор тела статьи на сохранённой реальной разметке (без сети) ---
+# Страницы сохранены в октябре 2026 без script/style/svg, но с меню, подвалом, врезками и
+# «связанными новостями» — чтобы тест проверял именно исключение этих блоков.
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _fixture(name: str) -> str:
+    return (FIXTURES / name).read_text(encoding="utf-8")
+
+
+def test_garant_article_parser_keeps_paragraphs_and_list_drops_chrome():
+    text = ARTICLE_PARSERS["garant.ru"](_fixture("garant_article_2262611.html"))
+    assert text.startswith("В некоторых ситуациях собственнику квартиры или жилого дома")
+    assert "Адресную справку чаще всего запрашивают для:" in text
+    assert "- совершения сделки купли-продажи недвижимости на вторичном рынке;" in text
+    assert "- оформления ипотеки на вторичное жилье;" in text
+    # меню/шапка, теги, источник, соцсети, подписка, подпись к фото — не тело статьи
+    for junk in ("Теги:", "Источник:", "Перепечатка", "Читать ГАРАНТ.РУ", "Подписаться", "Вакансии", "Демо-доступ", "Фотобанк"):
+        assert junk not in text, junk
+
+
+def test_pravo_article_parser_drops_embedded_related_block_and_chrome():
+    text = ARTICLE_PARSERS["pravo.ru"](_fixture("pravo_article_266117.html"))
+    assert text.startswith("Минэкономики Германии ищет юристов для сопровождения продажи SEFE")
+    assert "Подготовкой этой операции занимается банк Lazard." in text
+    # врезка «читайте также» посреди статьи, лид из шапки, кнопки «Поделиться», теги — исключены
+    assert "Суд оставил в силе запрет на продолжение чешского арбитража" not in text
+    assert "Поделиться" not in text
+    assert "Article tags" not in text
+    assert "Санкции" not in text
+
+
+def test_consultant_article_parser_keeps_body_and_document_block_drops_related_news():
+    text = ARTICLE_PARSERS["consultant.ru"](_fixture("consultant_article_32769.html"))
+    assert text.startswith("С 13 октября 2026 года при форс-мажоре заказчики смогут менять условия федеральных контрактов")
+    assert "- срок исполнения контракта;" in text
+    assert "Есть и другие изменения." in text
+    # блок «Документ:» остаётся в тексте как есть (из него факты достаёт отдельный этап)
+    assert "Документ:" in text
+    assert "Постановление Правительства РФ от 02.10.2026 N 1288" in text
+    # «Связанные новости», боковая колонка, теги, кнопка «Все новости» — не тело
+    for junk in ("Связанные новости", "Все новости", "Изменения-2026", "Закон N 44-ФЗ"):
+        assert junk not in text, junk
+
+
+def test_article_parsers_return_empty_string_when_markup_has_no_article_body():
+    for domain, parse in ARTICLE_PARSERS.items():
+        assert parse("<html><body><nav>Меню</nav><p>Просто страница</p></body></html>") == "", domain
+
+
+def test_article_parser_ignores_nested_same_tag_noise_inside_skipped_block():
+    html = (
+        '<section class="article-content"><p>Начало.</p>'
+        '<section class="embed-block"><section><span>Читайте также</span></section>Врезка</section>'
+        "<p>Конец.</p></section><p>Вне статьи</p>"
+    )
+    assert ARTICLE_PARSERS["pravo.ru"](html) == "Начало.\nКонец."
+
+
+@pytest.mark.asyncio
+async def test_fetch_article_text_uses_site_parser_for_consultant(monkeypatch):
+    body = _fixture("consultant_article_32769.html").encode("utf-8")
+
+    async def fake_fetch(url, **kwargs):
+        return FetchResult(url, 200, "text/html; charset=UTF-8", body)
+
+    monkeypatch.setattr(html_source, "fetch_url", fake_fetch)
+    text = await fetch_article_text("https://www.consultant.ru/legalnews/32769/", domain="consultant.ru")
+    assert text is not None and text.startswith("С 13 октября 2026 года")
+    assert "Связанные новости" not in text

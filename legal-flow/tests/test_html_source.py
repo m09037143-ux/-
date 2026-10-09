@@ -9,6 +9,7 @@ from app.providers.html_source import (
     build_candidates,
     decode_body,
     matches_theme,
+    parse_consultant_listing,
     parse_garant_listing,
     parse_pravo_listing,
 )
@@ -20,6 +21,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 # и не ломаются от изменений сайтов, но при смене разметки парсер нужно обновить вместе с ними.
 GARANT_HTML = (FIXTURES / "garant_news_list.html").read_text(encoding="utf-8")
 PRAVO_HTML = (FIXTURES / "pravo_news_list.html").read_text(encoding="utf-8")
+CONSULTANT_HTML = (FIXTURES / "consultant_news_list.html").read_text(encoding="utf-8")
 
 
 def test_parse_garant_listing_extracts_title_url_lead_date():
@@ -43,9 +45,31 @@ def test_parse_pravo_listing_extracts_title_url_lead_date():
     assert first.published == "2026-10-02T19:04:05Z"
 
 
+def test_parse_consultant_listing_extracts_title_url_date_skips_main_news_block():
+    items = parse_consultant_listing(CONSULTANT_HTML)
+    assert len(items) == 5  # блок «Главное» (important-news__*) в список не попадает
+    first = items[0]
+    assert first.title == "Защита от БПЛА: условия ряда федеральных госконтрактов можно будет поменять при форс-мажоре"
+    assert first.url == "https://www.consultant.ru/legalnews/32769/"
+    assert first.published == "Сегодня"
+    assert first.lead == ""  # анонса в списке нет
+    assert "Доступ к ИИ-помощнику" not in [i.title for i in items]
+    assert all(i.url.startswith("https://www.consultant.ru/legalnews/") for i in items)
+
+
+def test_consultant_candidate_uses_title_as_fragment_and_news_id_in_story_key():
+    items = parse_consultant_listing(CONSULTANT_HTML)
+    c = build_candidates("consultant.ru", items, theme="", limit=1)[0]
+    assert c.discovery_domain == "consultant.ru"
+    assert c.normalized_url == "https://www.consultant.ru/legalnews/32769/"
+    assert c.story_key == "html:consultant.ru:32769"
+    assert c.original_fragment == c.title
+
+
 def test_parsers_return_nothing_on_unrelated_markup():
     assert parse_garant_listing("<html><body><p>нет новостей</p></body></html>") == []
     assert parse_pravo_listing("<html><body><header>Меню</header></body></html>") == []
+    assert parse_consultant_listing("<html><body><p>нет новостей</p></body></html>") == []
 
 
 def test_matches_theme_is_case_insensitive_stem_match():
@@ -169,3 +193,15 @@ async def test_scan_job_falls_back_to_fixture_for_unsupported_domain(authed, mon
     # this flow, so a leftover row here would steal a later test's job (see the same
     # caveat documented in tests/test_worker_polling.py).
     await run_next_pending_job()
+
+
+async def test_discover_includes_consultant_via_site_registry(monkeypatch):
+    pages = {
+        "https://www.consultant.ru/legalnews/": FetchResult(
+            "https://www.consultant.ru/legalnews/", 200, "text/html; charset=UTF-8", CONSULTANT_HTML.encode("utf-8")
+        ),
+    }
+    monkeypatch.setattr(html_source, "fetch_url", _fake_fetch(pages))
+    items = await HtmlSourceProvider().discover(domains=["consultant.ru"], theme="налоговый вычет", limit=5)
+    assert [c.title for c in items] == ["Налоговый вычет на лечение: ФНС напомнила, как подтвердить расходы"]
+    assert "consultant.ru" in html_source.SUPPORTED_DOMAINS

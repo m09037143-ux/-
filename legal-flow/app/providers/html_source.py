@@ -118,6 +118,26 @@ class _PravoParser(_ListingParser):
             self._begin("lead", "article")
 
 
+class _ConsultantParser(_ListingParser):
+    """consultant.ru/legalnews/: карточка = <div class="listing-news__item"> с датой
+    (listing-news__item-date: «Сегодня» / «8 октября» — относительный текст, не ISO),
+    ссылкой listing-news__item-title (внутри <span> заголовок). Анонса в списке нет —
+    лид пустой, фрагментом станет заголовок. Блок «Главное» (important-news__*) и
+    боковые списки используют другие классы и сюда не попадают."""
+
+    def start(self, tag, attrs):
+        classes = _classes(attrs)
+        if tag == "div" and "listing-news__item" in classes:
+            self._start_item()
+        elif self._current is None:
+            return
+        elif tag == "div" and "listing-news__item-date" in classes:
+            self._begin("published", "div")
+        elif tag == "a" and "listing-news__item-title" in classes and not self._current.get("url"):
+            self._current["url"] = attrs.get("href") or ""
+            self._begin("title", "a")
+
+
 def _parse(parser: _ListingParser, html: str, base_url: str) -> list[ParsedListItem]:
     parser.feed(html)
     parser.close()
@@ -144,15 +164,20 @@ def parse_pravo_listing(html: str, base_url: str = "https://pravo.ru/news/") -> 
     return _parse(_PravoParser(), html, base_url)
 
 
+def parse_consultant_listing(html: str, base_url: str = "https://www.consultant.ru/legalnews/") -> list[ParsedListItem]:
+    return _parse(_ConsultantParser(), html, base_url)
+
+
 # list_url для pravo.ru — без «www»: у www.pravo.ru не проходит проверка TLS-сертификата,
 # а fetch_url проверку не отключает (и не должен).
 SITES = {
     "garant.ru": ("https://www.garant.ru/news/", parse_garant_listing),
     "pravo.ru": ("https://pravo.ru/news/", parse_pravo_listing),
+    "consultant.ru": ("https://www.consultant.ru/legalnews/", parse_consultant_listing),
 }
 SUPPORTED_DOMAINS = frozenset(SITES)
 
-_ID_RE = re.compile(r"/news/(\d+)")
+_ID_RE = re.compile(r"/(?:legal)?news/(\d+)")
 
 
 def theme_keywords(theme: str) -> list[str]:
@@ -291,10 +316,142 @@ def extract_visible_text(html: str) -> str:
     return parser.text()
 
 
-# Точный разбор тела статьи (без меню/подвала/рекламы) по доменам — заполняется по
-# мере изучения живой разметки каждого сайта. Домен без записи здесь получает
-# extract_visible_text() как грубый запасной вариант (см. его docstring).
-ARTICLE_PARSERS: dict[str, Callable[[str], str]] = {}
+class _ScopedTextParser(HTMLParser):
+    """Точный разбор тела статьи: собирает текст только внутри «области статьи»
+    (её начало определяет is_scope_start подкласса), пропуская внутри неё поддеревья
+    is_skip_start (блоки «читайте также», реклама и т.п.) и служебные теги. Абзацы
+    и пункты списков разделяются переносами строк."""
+
+    _ALWAYS_SKIP = {"script", "style", "noscript", "svg", "iframe", "figure", "form", "button"}
+    _BLOCK_TAGS = {"p", "div", "li", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6", "br", "tr", "section", "blockquote"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._scope_tag: str | None = None
+        self._scope_depth = 0
+        self._skip_tag: str | None = None
+        self._skip_depth = 0
+        self._parts: list[str] = []
+
+    def is_scope_start(self, tag: str, attrs: dict) -> bool:  # pragma: no cover - overridden
+        raise NotImplementedError
+
+    def is_skip_start(self, tag: str, attrs: dict) -> bool:
+        return False
+
+    def on_scope_end(self) -> None:
+        pass
+
+    def observe(self, tag: str, attrs: dict) -> None:
+        """Хук для подклассов: вызывается на каждом открывающем теге до остальной логики."""
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        self.observe(tag, attrs)
+        if self._scope_tag is None:
+            if self.is_scope_start(tag, attrs):
+                self._scope_tag, self._scope_depth = tag, 1
+            return
+        if tag == self._scope_tag:
+            self._scope_depth += 1
+        if self._skip_tag is not None:
+            if tag == self._skip_tag:
+                self._skip_depth += 1
+            return
+        if tag in self._ALWAYS_SKIP or self.is_skip_start(tag, attrs):
+            self._skip_tag, self._skip_depth = tag, 1
+            return
+        if tag in self._BLOCK_TAGS:
+            self._parts.append("\n- " if tag == "li" else "\n")
+
+    def handle_endtag(self, tag):
+        if self._scope_tag is None:
+            return
+        if self._skip_tag is not None and tag == self._skip_tag:
+            self._skip_depth -= 1
+            if self._skip_depth == 0:
+                self._skip_tag = None
+        if tag == self._scope_tag:
+            self._scope_depth -= 1
+            if self._scope_depth == 0:
+                self._scope_tag = None
+                self._parts.append("\n")
+                self.on_scope_end()
+
+    def handle_data(self, data):
+        if self._scope_tag is not None and self._skip_tag is None:
+            self._parts.append(data)
+
+    def text(self) -> str:
+        raw = "".join(self._parts)
+        lines = [" ".join(line.split()) for line in raw.splitlines()]
+        return "\n".join(line for line in lines if line and line != "-")
+
+
+class _GarantArticleParser(_ScopedTextParser):
+    """garant.ru/news/ID/: тело — первый <div class="clearfix"> внутри <div class="news-block">
+    (после h1, даты, до тегов/«Источник»/«Читать ГАРАНТ.РУ в»/подписки). Внутри — <p>, <ul>/<li>;
+    <figure> (фото и подпись) и <style> отбрасываются."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._in_news_block = False
+        self._done = False
+
+    def observe(self, tag, attrs):
+        if "news-block" in _classes(attrs):
+            self._in_news_block = True
+
+    def is_scope_start(self, tag, attrs):
+        return tag == "div" and not self._done and self._in_news_block and "clearfix" in _classes(attrs)
+
+    def on_scope_end(self):
+        self._done = True
+
+
+class _PravoArticleParser(_ScopedTextParser):
+    """pravo.ru/news/ID/: тело — <section class="article-content">; врезки «читайте также»
+    (<section class="embed-block">) исключаются. Лид (<p class="paragraph"> в <header>)
+    лежит вне области — он и так есть в анонсе из списка."""
+
+    def is_scope_start(self, tag, attrs):
+        return tag == "section" and "article-content" in _classes(attrs)
+
+    def is_skip_start(self, tag, attrs):
+        return "embed-block" in _classes(attrs)
+
+
+class _ConsultantArticleParser(_ScopedTextParser):
+    """consultant.ru/legalnews/ID/: тело — <div class="news-page__text"> плюс
+    <div class="news-page__bottom"> с блоками «Документ:» / «Полезные ссылки:» (по ТЗ
+    они остаются в тексте как есть). «Связанные новости» (news-page__similar) и боковая
+    колонка в область не входят."""
+
+    def is_scope_start(self, tag, attrs):
+        return tag == "div" and bool({"news-page__text", "news-page__bottom"} & _classes(attrs))
+
+
+def _article_parser(parser_cls: type[_ScopedTextParser]) -> Callable[[str], str]:
+    def parse(html: str) -> str:
+        parser = parser_cls()
+        parser.feed(html)
+        parser.close()
+        return parser.text()
+
+    return parse
+
+
+_parse_garant_article = _article_parser(_GarantArticleParser)
+_parse_pravo_article = _article_parser(_PravoArticleParser)
+_parse_consultant_article = _article_parser(_ConsultantArticleParser)
+
+# Точный разбор тела статьи (без меню/подвала/рекламы) по доменам. Домен без записи
+# здесь получает extract_visible_text() как грубый запасной вариант (см. его docstring).
+ARTICLE_PARSERS: dict[str, Callable[[str], str]] = {
+    "garant.ru": _parse_garant_article,
+    "pravo.ru": _parse_pravo_article,
+    "consultant.ru": _parse_consultant_article,
+}
 
 _ARTICLE_TEXT_MAX_CHARS = 12_000
 
@@ -323,4 +480,6 @@ async def fetch_article_text(url: str, *, domain: str) -> str | None:
         return None
     parse = ARTICLE_PARSERS.get(domain, extract_visible_text)
     text = parse(decode_body(result.body, result.content_type)).strip()
+    if not text and domain in ARTICLE_PARSERS:
+        logger.warning("article parse %s: empty text — markup of %s may have changed", url, domain)
     return text[:_ARTICLE_TEXT_MAX_CHARS] if text else None
