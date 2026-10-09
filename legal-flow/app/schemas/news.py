@@ -18,6 +18,15 @@ class FactPassportOut(BaseModel):
     overall_status: str
 
 
+class SourceOverlapOut(BaseModel):
+    share: float
+    longest_run_words: int
+    warning: bool
+    basis: str = "generation"
+    checked_at: str | None = None
+    stale: bool = False
+
+
 class NewsItemOut(BaseModel):
     """InternalNews (ТЗ §11) — includes discovery source, only for the editor's own
     workspace. Never served as-is to the public preview / XML."""
@@ -38,6 +47,7 @@ class NewsItemOut(BaseModel):
     attribution_text: str
     version: int
     rejected_reason: str
+    source_overlap: SourceOverlapOut | None = None
     created_at: datetime
 
 
@@ -47,6 +57,7 @@ class NewsListItemOut(BaseModel):
     discovery_domain: str
     status: str
     has_official_document: bool
+    source_overlap: SourceOverlapOut | None = None
     created_at: datetime
 
 
@@ -119,3 +130,4 @@ class SourceViewOut(BaseModel):
     text: str | None = None
     text_note: str | None = None
     similarity: SimilarityOut | None = None
+    overlap: SourceOverlapOut | None = None

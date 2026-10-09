@@ -11,7 +11,7 @@ from app.providers.html_source import fetch_article_text
 from app.providers.yandex_gpt import RelevanceResult, YandexGPTPro51Provider
 from app.services import news_service
 from app.services.activity_service import log_activity
-from app.services.text_similarity import text_overlap
+from app.services.text_similarity import overlap_record, text_overlap
 
 logger = logging.getLogger("app.services.ai_service")
 
@@ -83,6 +83,11 @@ async def generate_ai_draft(db: AsyncSession, *, news: NewsItem, expected_versio
     news = await news_service.update_draft(
         db, news=news, expected_version=news.version, title=draft.title, text=draft.text, user_id=user_id
     )
+    # Счётчик совпадения с оригиналом — только если модель получила полный текст статьи
+    # (по одному анонсу сравнивать бессмысленно). Хранятся лишь числа, не сам текст.
+    full_text_used = source_fragment != news.discovery_original_fragment
+    news.source_overlap = overlap_record(draft.text, source_fragment, "generation") if full_text_used else None
+    await db.commit()
 
     await log_activity(
         db, workspace_id=news.workspace_id, action="ai_draft_generated",
@@ -180,7 +185,7 @@ async def _models_used(db: AsyncSession, news: NewsItem) -> dict | None:
     return None
 
 
-async def get_source_view(db: AsyncSession, news: NewsItem, *, load_text: bool) -> dict:
+async def get_source_view(db: AsyncSession, news: NewsItem, *, load_text: bool, persist: bool = False) -> dict:
     """Вкладка «Исходный материал»: откуда взят материал, анонс, какие модели работали и —
     по запросу — текст оригинала, загруженный с сайта прямо сейчас (тот же вход, что получает
     модель). Текст оригинала НИГДЕ не сохраняется: source_policies не разрешают retain_full_text,
@@ -198,6 +203,7 @@ async def get_source_view(db: AsyncSession, news: NewsItem, *, load_text: bool) 
         "text": None,
         "text_note": None,
         "similarity": None,
+        "overlap": news.source_overlap,
     }
     if not load_text:
         return view
@@ -214,4 +220,8 @@ async def get_source_view(db: AsyncSession, news: NewsItem, *, load_text: bool) 
     view["text"] = text
     if news.text:
         view["similarity"] = text_overlap(news.text, text)
+        if persist:
+            news.source_overlap = overlap_record(news.text, text, "manual_check")
+            await db.commit()
+            view["overlap"] = news.source_overlap
     return view

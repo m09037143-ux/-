@@ -58,7 +58,7 @@ async def list_news(
         out.append(
             NewsListItemOut(
                 id=n.id, title=n.title, discovery_domain=n.discovery_domain,
-                status=n.status.value, has_official_document=has_doc, created_at=n.created_at,
+                status=n.status.value, has_official_document=has_doc, source_overlap=n.source_overlap, created_at=n.created_at,
             )
         )
     return out
@@ -89,6 +89,21 @@ async def get_news_source(
     return await ai_service.get_source_view(db, news, load_text=full)
 
 
+@router.post("/news/{news_id}/source-check", response_model=SourceViewOut, dependencies=[Depends(require_csrf)])
+async def check_news_source(
+    news_id: uuid.UUID,
+    membership: Membership = Depends(require_role(*_EDIT_ROLES)),
+    _access: Membership = Depends(require_active_access),
+    db: AsyncSession = Depends(get_db),
+):
+    """Загружает оригинал и пересчитывает совпадение с текущим черновиком (сохраняются только числа)."""
+    news = await news_service.get_owned_news(db, workspace_id=membership.workspace_id, news_id=news_id)
+    await enforce_rate_limit(
+        "news_source", str(membership.workspace_id), get_settings().rate_limit_news_source_per_hour, 3600
+    )
+    return await ai_service.get_source_view(db, news, load_text=True, persist=True)
+
+
 @router.patch("/news/{news_id}/draft", response_model=NewsItemOut, dependencies=[Depends(require_csrf)])
 async def update_draft(
     news_id: uuid.UUID,
@@ -102,6 +117,7 @@ async def update_draft(
     news = await news_service.update_draft(
         db, news=news, expected_version=payload.expected_version, title=payload.title, text=payload.text, user_id=user.id
     )
+    await news_service.mark_overlap_stale(db, news)
     return await news_service.to_internal_out(db, news)
 
 

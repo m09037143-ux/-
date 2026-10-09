@@ -3,6 +3,7 @@
 
 import difflib
 import re
+from datetime import datetime, timezone
 
 NGRAM = 4
 WARN_SHARE = 0.35  # доля 4-словных фраз черновика, найденных в оригинале
@@ -25,4 +26,18 @@ def text_overlap(draft: str, source: str) -> dict:
         "longest_run_words": match.size,
         "longest_run_text": run_text[:300],
         "warning": share >= WARN_SHARE or match.size >= WARN_RUN_WORDS,
+    }
+
+
+def overlap_record(draft: str, source: str, basis: str) -> dict:
+    """То, что хранится в news_items.source_overlap: только числа и метка происхождения
+    (generation — посчитано при генерации; manual_check — редактор перепроверил по кнопке)."""
+    result = text_overlap(draft, source)
+    return {
+        "share": result["share"],
+        "longest_run_words": result["longest_run_words"],
+        "warning": result["warning"],
+        "basis": basis,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "stale": False,
     }

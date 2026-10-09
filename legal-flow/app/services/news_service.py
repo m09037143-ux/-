@@ -52,8 +52,16 @@ async def to_internal_out(db: AsyncSession, news: NewsItem) -> NewsItemOut:
         attribution_text=news.attribution_text,
         version=news.version,
         rejected_reason=news.rejected_reason,
+        source_overlap=news.source_overlap,
         created_at=news.created_at,
     )
+
+
+async def mark_overlap_stale(db: AsyncSession, news: NewsItem) -> None:
+    """Редактор поправил текст вручную — сохранённое совпадение с оригиналом уже не про этот текст."""
+    if news.source_overlap and not news.source_overlap.get("stale"):
+        news.source_overlap = {**news.source_overlap, "stale": True}
+        await db.commit()
 
 
 def _reset_review_flags_and_bump(news: NewsItem) -> None:

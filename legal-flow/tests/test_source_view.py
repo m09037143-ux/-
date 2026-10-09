@@ -48,7 +48,7 @@ class FakeDb:
 def _news(text="Сделка должника оспорена: имущество продали дёшево незадолго перед банкротством."):
     return SimpleNamespace(
         id=uuid.uuid4(), workspace_id=uuid.uuid4(), discovery_id=uuid.uuid4(), discovery_domain="pravo.ru",
-        discovery_original_fragment="Анонс статьи", text=text,
+        discovery_original_fragment="Анонс статьи", text=text, source_overlap=None,
     )
 
 

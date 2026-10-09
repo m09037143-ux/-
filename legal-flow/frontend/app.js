@@ -167,6 +167,21 @@
     var m = STATUS_LABELS[status] || ['draft', status];
     return '<span class="status ' + m[0] + '">' + esc(m[1]) + '</span>';
   }
+  // Счётчик совпадения черновика с оригиналом: <20% — норма, 20–35% — внимание, от 35% (или длинная цепочка) — переписать
+  function overlapBadge(o) {
+    if (!o) return '<span class="status draft">не рассчитано</span>';
+    var pct = Math.round(o.share * 100);
+    var cls = o.warning ? 'danger' : (pct >= 20 ? 'review' : 'ready');
+    return '<span class="status ' + cls + '">' + pct + '%' + (o.stale ? ' · устарело' : '') + '</span>';
+  }
+  function overlapBlock(d) {
+    var o = d.source_overlap, canRecheck = state.access && state.access.can_mutate;
+    var detail = !o ? 'Считается автоматически при генерации черновика по полному тексту статьи; для ручных текстов — по кнопке.'
+      : 'Доля четырёхсловных фраз черновика, найденных в оригинале · самая длинная дословная цепочка — ' + o.longest_run_words + ' сл.'
+        + (o.stale ? ' · текст правили вручную после расчёта — перепроверьте' : (o.basis === 'generation' ? ' · посчитано при генерации' : ' · перепроверено вручную'))
+        + (o.warning ? '. Текст слишком близок к оригиналу — перепишите своими словами.' : '');
+    return '<div class="notice' + (o && o.warning ? ' warning' : '') + '" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:14px"><strong>Совпадение с оригиналом: ' + overlapBadge(o) + '</strong><span class="small" style="flex:1;min-width:220px">' + detail + '</span>' + (canRecheck && d.text ? button('Перепроверить', 'recheckOverlap', 'secondary') : '') + '</div>';
+  }
   function field(id, label, type, initial) {
     return '<div class="field"><label for="' + id + '">' + label + '</label><input type="' + (type || 'text') + '" id="' + id + '" value="' + esc(initial || '') + '"><span class="error" id="err-' + id + '"></span></div>';
   }
@@ -374,8 +389,8 @@
         && x.title.toLowerCase().indexOf(state.newsQuery.toLowerCase()) !== -1
         && (state.newsSourceFilter === 'Все' || x.discovery_domain === state.newsSourceFilter);
     });
-    return list.length ? '<table class="table"><thead><tr><th>Материал</th><th>Источник обнаружения</th><th>Официальный документ</th><th>Статус</th><th>Действие</th></tr></thead><tbody>' + list.map(function (x) {
-      return '<tr><td>' + esc(x.title) + '</td><td>' + esc(x.discovery_domain) + '</td><td>' + (x.has_official_document ? 'Указан' : 'Не указан') + '</td><td>' + badge(x.status) + '</td><td>' + button('Открыть', 'open', '', 'data-id="' + x.id + '"') + '</td></tr>';
+    return list.length ? '<table class="table"><thead><tr><th>Материал</th><th>Источник обнаружения</th><th>Официальный документ</th><th>Совпадение</th><th>Статус</th><th>Действие</th></tr></thead><tbody>' + list.map(function (x) {
+      return '<tr><td>' + esc(x.title) + '</td><td>' + esc(x.discovery_domain) + '</td><td>' + (x.has_official_document ? 'Указан' : 'Не указан') + '</td><td>' + overlapBadge(x.source_overlap) + '</td><td>' + badge(x.status) + '</td><td>' + button('Открыть', 'open', '', 'data-id="' + x.id + '"') + '</td></tr>';
     }).join('') + '</tbody></table>' : '<p>По выбранным фильтрам материалов нет.</p>';
   }
 
@@ -396,10 +411,10 @@
     if (!d) return page('Материал не найден', button('Назад', 'news'));
     var tab = state.detailTab, main;
     if (tab === 'Текст для публикации') {
-      main = state.editingDraft
+      main = overlapBlock(d) + (state.editingDraft
         ? field('edit-title', 'Заголовок', 'text', d.title) + '<div class="field"><label for="edit-text">Самостоятельный текст</label><textarea id="edit-text" style="min-height:290px">' + esc(d.text) + '</textarea></div><p class="small" id="counter">Символов: ' + d.text.length + '</p>'
           + button('Сгенерировать черновик через ИИ (YandexGPT Pro 5.1)', 'aiDraft', 'secondary')
-        : '<article class="article"><h2>' + esc(d.title) + '</h2>' + esc(d.text) + '</article>';
+        : '<article class="article"><h2>' + esc(d.title) + '</h2>' + esc(d.text) + '</article>');
     } else if (tab === 'Источник обнаружения') {
       main = '<p class="notice warning">Внутренний раздел. Текст новостного сайта не переносится в публикацию.</p><div class="source-box"><strong>' + esc(d.discovery_domain) + '</strong><p>' + esc(d.discovery_original_fragment) + '</p></div>';
     } else if (tab === 'Исходный материал') {
@@ -543,7 +558,10 @@
     if (!slot || !state.detail) return;
     try {
       if (full) slot.innerHTML = '<p class="small">Загружаем текст оригинала с сайта…</p>';
-      var view = await api('/api/v1/news/' + state.detail.id + '/source' + (full ? '?full=true' : ''));
+      var view = full
+        ? await api('/api/v1/news/' + state.detail.id + '/source-check', { method: 'POST' })
+        : await api('/api/v1/news/' + state.detail.id + '/source');
+      if (full && view.overlap) state.detail.source_overlap = view.overlap;
       slot = document.getElementById('source-slot');
       if (slot) slot.innerHTML = sourceSlotHtml(view);
     } catch (e) { toast(e.message, true); }
@@ -780,6 +798,13 @@
         state.setupStep++; return render();
       }
       if (a === 'loadSource') { await loadSourceSlot(true); return; }
+      if (a === 'recheckOverlap') {
+        if (!gate()) return;
+        toast('Загружаем оригинал и пересчитываем совпадение…');
+        var chk = await api('/api/v1/news/' + state.detail.id + '/source-check', { method: 'POST' });
+        if (chk.overlap) state.detail.source_overlap = chk.overlap; else toast(chk.text_note || 'Не удалось пересчитать — нет текста оригинала или черновика', true);
+        return render();
+      }
       if (a === 'edit') { if (!gate()) return; state.editingDraft = true; state.detailTab = 'Текст для публикации'; return render(); }
       if (a === 'saveDraft') {
         if (!gate()) return;

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -69,6 +69,10 @@ class NewsItem(Base, UUIDPk, TimestampMixin):
     discovery_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("discoveries.id"), nullable=True
     )
+
+    # Совпадение черновика с оригиналом: {share, longest_run_words, warning, basis, checked_at, stale}.
+    # Только числа — сам текст оригинала не хранится (нет retain_full_text).
+    source_overlap: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     official_reviewed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     facts_reviewed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
