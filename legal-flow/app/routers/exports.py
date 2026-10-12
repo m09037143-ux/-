@@ -1,6 +1,8 @@
+import re
 import uuid
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -42,6 +44,25 @@ async def create_export(
 ):
     export = await export_service.create_export(db, workspace_id=membership.workspace_id, filename=payload.filename)
     return _out(export)
+
+
+def attachment_headers(filename: str) -> dict:
+    """Content-Disposition для скачивания: ASCII-имя для старых клиентов + filename* (UTF-8) для кириллицы."""
+    ascii_name = re.sub(r"[^A-Za-z0-9._-]", "_", filename) or "export.xml"
+    return {"Content-Disposition": f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"}
+
+
+@router.get("/exports/{export_id}/file")
+async def download_export_file(
+    export_id: uuid.UUID,
+    membership: Membership = Depends(get_current_membership),
+    db: AsyncSession = Depends(get_db),
+):
+    """Скачивание XML на компьютер (сам файл, а не JSON)."""
+    export = await db.get(Export, export_id)
+    if export is None or export.workspace_id != membership.workspace_id:
+        raise AppError("VALIDATION_ERROR", "Экспорт не найден.")
+    return Response(content=export.content, media_type="application/xml; charset=utf-8", headers=attachment_headers(export.filename))
 
 
 @router.get("/exports/{export_id}/download", response_model=ExportDownloadOut)

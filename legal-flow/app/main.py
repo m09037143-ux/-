@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
 from app.errors import AppError, app_error_handler, request_validation_error_handler
-from app.routers import access, activity, admin, ai, auth, billing, exports, flows, news
+from app.routers import access, activity, admin, ai, api_keys, auth, billing, exports, feed, flows, news
 
 
 def create_app() -> FastAPI:
@@ -37,6 +37,8 @@ def create_app() -> FastAPI:
     app.include_router(activity.router)
     app.include_router(ai.router)
     app.include_router(exports.router)
+    app.include_router(api_keys.router)
+    app.include_router(feed.router)
     app.include_router(admin.router)
 
     @app.get("/health/live")

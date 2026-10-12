@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.db import get_db
 from app.errors import AppError
-from app.models import Membership, Session as SessionModel, User
+from app.models import ApiKey, Membership, Session as SessionModel, User
 from app.models.enums import Role
 from app.security import csrf_token_valid
 from app.services.auth_service import get_session_by_token
@@ -102,3 +102,23 @@ async def require_active_access(
     if not await has_mutating_access(db, membership.workspace_id):
         raise AppError("TRIAL_EXPIRED", "Демонстрационный доступ завершён. Материалы доступны только для чтения.")
     return membership
+
+
+async def get_api_key(request: Request, db: AsyncSession = Depends(get_db)) -> ApiKey:
+    """Доступ по API-ключу: заголовок «Authorization: Bearer <ключ>» или «X-API-Key: <ключ>».
+    Ключ даёт только чтение опубликованных материалов своего рабочего пространства."""
+    from app.services import api_key_service
+    from app.services.rate_limit import enforce_rate_limit
+
+    raw = ""
+    auth = request.headers.get("Authorization", "")
+    if auth.lower().startswith("bearer "):
+        raw = auth[7:].strip()
+    raw = raw or request.headers.get("X-API-Key", "").strip()
+    if not raw:
+        raise AppError("UNAUTHORIZED", "Нужен API-ключ: заголовок «Authorization: Bearer <ключ>» или «X-API-Key».")
+    key = await api_key_service.authenticate(db, raw)
+    if key is None:
+        raise AppError("UNAUTHORIZED", "API-ключ недействителен или отозван.")
+    await enforce_rate_limit("api_key", str(key.id), get_settings().rate_limit_api_per_hour, 3600)
+    return key

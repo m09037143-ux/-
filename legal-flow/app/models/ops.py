@@ -59,3 +59,22 @@ class ActivityEvent(Base, UUIDPk):
     action: Mapped[str] = mapped_column(String(100), nullable=False)
     details: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ApiKey(Base, UUIDPk):
+    """Ключ доступа к API (только чтение опубликованных материалов своего рабочего пространства).
+    Сам ключ нигде не хранится — только SHA-256 (ключ длинный и случайный, соль не нужна);
+    key_prefix — начало ключа, по которому его узнают в списке."""
+
+    __tablename__ = "api_keys"
+
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    key_prefix: Mapped[str] = mapped_column(String(20), nullable=False)
+    key_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

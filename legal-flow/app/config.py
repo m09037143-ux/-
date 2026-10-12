@@ -66,6 +66,8 @@ class Settings(BaseSettings):
     rate_limit_scan_jobs_per_hour: int = 20
     rate_limit_add_source_per_hour: int = 30
     rate_limit_news_source_per_hour: int = 60
+    rate_limit_api_per_hour: int = 1000  # запросов в час на один API-ключ
+    max_api_keys_per_workspace: int = 10
 
     def yandex_model_uri_matches_folder(self) -> bool:
         if not self.yandex_folder_id or not self.yandex_model_uri:

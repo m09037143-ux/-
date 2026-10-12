@@ -100,6 +100,7 @@
     scanJobWatching: false,
     newsSignature: '',
     exportsList: [],
+    apiKeys: [],
     publishedCount: 0,
     activityList: [],
     plansList: [],
@@ -470,7 +471,32 @@
 
   function exportsPage() {
     var published = state.user ? (state.publishedCount || 0) : currentNewsSource().filter(function (x) { return x.status === 'PUBLISHED'; }).length;
-    return page('Экспорт', '<div class="grid2"><div class="card"><h3>Яндекс.Диск</h3><p class="notice">Не подключён. Реальной отправки нет.</p></div><div class="card"><h3>XML для сайта</h3><p>Опубликованных материалов: ' + published + '</p><p class="small">В XML включены только текст и официальный документ; сайт обнаружения не входит.</p>' + field('xml-name', 'Название файла', 'text', 'legal-news.xml') + button('Предпросмотр / Сформировать XML', 'exportXml', 'primary', published ? '' : 'disabled title="Сначала опубликуйте материал"') + '</div></div><div class="card" style="margin-top:17px"><h3>История экспортов</h3>' + (state.exportsList.length ? state.exportsList.map(function (x) { return '<p>' + esc(x.filename) + ' · ' + x.status + ' · файл не отправлен</p>'; }).join('') : '<p>Пока нет записей.</p>') + '</div>');
+    var disabled = published ? '' : 'disabled title="Сначала опубликуйте материал"';
+    var base = location.origin;
+    var channels = [
+      ['Скачать на компьютер', 'Доступно', 'ready', 'Кнопка «Скачать XML-файл» в карточке слева и значок «Скачать» в истории.'],
+      ['По API', 'Доступно', 'ready', 'Ключи и примеры запросов — в блоке «Доступ по API» ниже.'],
+      ['Яндекс.Диск', 'Скоро', 'draft', 'Не подключён: файлы на Диск пока не отправляются.'],
+      ['Отправка на e-mail', 'Скоро', 'draft', 'Не подключена: письма с файлом пока не отправляются.']
+    ].map(function (c) {
+      return '<div class="row" style="justify-content:space-between;gap:12px"><div><strong>' + c[0] + '</strong><p class="small" style="margin:3px 0 0">' + c[3] + '</p></div><span class="status ' + c[2] + '">' + c[1] + '</span></div>';
+    }).join('');
+    var xmlCard = '<div class="card"><h3>XML для сайта</h3><p>Опубликованных материалов: ' + published + '</p><p class="small">В XML включены только текст и официальный документ; сайт обнаружения не входит. Доступно на любом тарифе.</p>'
+      + field('xml-name', 'Название файла', 'text', 'legal-news.xml')
+      + '<div class="row" style="gap:10px;flex-wrap:wrap">' + button('Скачать XML-файл', 'exportDownload', 'primary', disabled) + button('Предпросмотр XML', 'exportXml', 'secondary', disabled) + '</div></div>';
+    var keysHtml = state.apiKeys.length ? '<table class="table"><thead><tr><th>Название</th><th>Ключ</th><th>Создан</th><th>Последнее использование</th><th></th></tr></thead><tbody>' + state.apiKeys.map(function (k) {
+      return '<tr><td>' + esc(k.name) + '</td><td><code>' + esc(k.key_prefix) + '…</code></td><td>' + new Date(k.created_at).toLocaleDateString('ru-RU') + '</td><td>' + (k.last_used_at ? new Date(k.last_used_at).toLocaleString('ru-RU') : '—') + '</td><td>' + (k.revoked_at ? '<span class="status draft">Отозван</span>' : button('Отозвать', 'revokeKey', '', 'data-id="' + k.id + '"')) + '</td></tr>';
+    }).join('') + '</tbody></table>' : '<p class="small">Ключей пока нет.</p>';
+    var apiCard = '<div class="card" style="margin-top:17px"><h3>Доступ по API</h3>'
+      + '<p class="small">Забирайте опубликованные материалы своей программой или сайтом. Ключ даёт только чтение ваших материалов; показывается один раз при создании. Доступно на любом тарифе.</p>'
+      + keysHtml + '<div style="margin:12px 0">' + button('Создать ключ', 'createKey', 'primary') + '</div>'
+      + '<p class="small"><strong>Запросы</strong> (заголовок <code>Authorization: Bearer ВАШ_КЛЮЧ</code> или <code>X-API-Key</code>):</p>'
+      + '<pre class="xml">GET ' + esc(base) + '/api/v1/feed        — JSON\nGET ' + esc(base) + '/api/v1/feed.xml    — XML\nGET ' + esc(base) + '/api/v1/feed/{id}   — один материал (JSON)\n\nпараметры: since=2026-10-12T00:00:00Z (позже этой даты), limit=50 (до 200), offset=0</pre>'
+      + '<p class="small">Пример: <code>curl -H "Authorization: Bearer ВАШ_КЛЮЧ" "' + esc(base) + '/api/v1/feed.xml?limit=20"</code></p></div>';
+    var history = '<div class="card" style="margin-top:17px"><h3>История экспортов</h3>' + (state.exportsList.length ? state.exportsList.map(function (x) {
+      return '<div class="row" style="justify-content:space-between;gap:12px;padding:6px 0"><span>' + esc(x.filename) + ' · ' + new Date(x.created_at).toLocaleString('ru-RU') + ' · ' + x.news_item_ids.length + ' мат.</span><a class="btn" href="/api/v1/exports/' + x.id + '/file" download>Скачать</a></div>';
+    }).join('') : '<p>Пока нет записей.</p>') + '</div>';
+    return page('Экспорт', '<div class="grid2">' + xmlCard + '<div class="card"><h3>Куда доставить</h3><div style="display:grid;gap:14px">' + channels + '</div></div></div>' + apiCard + history);
   }
 
   function activityPage() {
@@ -618,6 +644,7 @@
       if (route === '/app/exports') {
         state.exportsList = await api('/api/v1/exports');
         state.publishedCount = (await api('/api/v1/news?status=PUBLISHED')).length;
+        try { state.apiKeys = await api('/api/v1/api-keys'); } catch (e) { state.apiKeys = []; }
       }
       if (route === '/app/activity') state.activityList = await api('/api/v1/activity');
       if (route === '/app/admin') {
@@ -707,6 +734,7 @@
         official: !!(document.getElementById('check-official') || {}).checked,
         facts: !!(document.getElementById('check-facts') || {}).checked,
         newPassword: value('modal-new-password'),
+        keyName: value('modal-key-name'),
         rights: !!(document.getElementById('modal-rights') || {}).checked
       };
       closeModal();
@@ -894,12 +922,44 @@
         });
         return;
       }
+      if (a === 'exportDownload') {
+        if (!gate()) return;
+        var dlName = value('xml-name') || 'legal-news.xml';
+        var made = await api('/api/v1/exports', { method: 'POST', body: { filename: dlName } });
+        state.exportsList = await api('/api/v1/exports');
+        window.location.href = '/api/v1/exports/' + made.id + '/file';
+        toast('Файл скачивается: ' + made.filename); render();
+        return;
+      }
+      if (a === 'createKey') {
+        if (!gate()) return;
+        modal('Новый API-ключ', field('modal-key-name', 'Название (например, «Сайт редакции»)', 'text', ''), 'Создать', async function (data) {
+          if (!data.keyName) return toast('Укажите название ключа', true);
+          var created = await api('/api/v1/api-keys', { method: 'POST', body: { name: data.keyName } });
+          state.apiKeys = await api('/api/v1/api-keys');
+          modal('Ключ создан', '<p class="notice warning">Скопируйте ключ сейчас: после закрытия окна он больше не показывается.</p><pre class="xml" style="word-break:break-all;white-space:pre-wrap">' + esc(created.key) + '</pre>' + button('Скопировать ключ', 'copyKey', 'secondary', 'data-key="' + esc(created.key) + '"'), 'Закрыть', function () { render(); });
+        });
+        return;
+      }
+      if (a === 'copyKey') {
+        try { await navigator.clipboard.writeText(b.dataset.key); toast('Ключ скопирован'); } catch (err) { toast('Не удалось скопировать — выделите ключ вручную', true); }
+        return;
+      }
+      if (a === 'revokeKey') {
+        if (!gate()) return;
+        var keyId = b.dataset.id;
+        modal('Отозвать ключ?', '<p>Программы, которые используют этот ключ, потеряют доступ. Отменить нельзя.</p>', 'Отозвать', async function () {
+          await api('/api/v1/api-keys/' + keyId, { method: 'DELETE' });
+          state.apiKeys = await api('/api/v1/api-keys'); toast('Ключ отозван'); render();
+        });
+        return;
+      }
       if (a === 'exportXml') {
         if (!gate()) return;
         var filename = value('xml-name') || 'legal-news.xml';
         var exp = await api('/api/v1/exports', { method: 'POST', body: { filename: filename } });
         var dl = await api('/api/v1/exports/' + exp.id + '/download');
-        modal('Экспорт XML (' + dl.status + ')', '<p class="small">Файл не отправлен: интеграция с Яндекс.Диском не подключена.</p><pre class="xml">' + esc(dl.content) + '</pre>', 'Закрыть', function () {});
+        modal('Предпросмотр XML', '<p class="small">Это предпросмотр. Сохранить файл на компьютер — кнопка «Скачать XML-файл».</p><pre class="xml">' + esc(dl.content) + '</pre>', 'Закрыть', function () {});
         state.exportsList = await api('/api/v1/exports'); render();
         return;
       }
