@@ -265,3 +265,19 @@ async def test_feed_requires_a_valid_key_over_http(monkeypatch):
         write = await client.post("/api/v1/feed", headers={"Authorization": "Bearer pp_live_x"})
     assert no_key.status_code == 401 and bad.status_code == 401
     assert write.status_code == 405  # лента только для чтения
+
+
+@pytest.mark.asyncio
+async def test_frontend_files_are_served_with_no_cache_so_deploys_show_up_without_ctrl_f5():
+    import httpx
+
+    from app.main import create_app
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app()), base_url="http://test") as client:
+        for path in ("/app.js", "/"):
+            resp = await client.get(path)
+            assert resp.status_code == 200, path
+            assert resp.headers["cache-control"] == "no-cache", path
+            assert "etag" in resp.headers  # по ETag браузер получит 304, если файл не менялся
+        again = await client.get("/app.js", headers={"If-None-Match": resp.headers["etag"]})
+    assert again.status_code in (200, 304)

@@ -12,6 +12,17 @@ from app.errors import AppError, app_error_handler, request_validation_error_han
 from app.routers import access, activity, admin, ai, api_keys, auth, billing, exports, feed, flows, news
 
 
+class _NoCacheStaticFiles(StaticFiles):
+    """Frontend отдаётся с Cache-Control: no-cache — браузер каждый раз сверяется с сервером по ETag
+    (без изменений — ответ 304 без загрузки файла), поэтому после деплоя пользователи сразу получают
+    новую версию, а не закэшированную старую (раньше помогал только Ctrl+F5)."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     logging.basicConfig(level=settings.log_level)
@@ -65,6 +76,6 @@ def create_app() -> FastAPI:
     # API-роуты (/api/v1/..., /health/...) matched первыми.
     frontend_dir = Path(__file__).resolve().parent.parent / "frontend"
     if frontend_dir.is_dir():
-        app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
+        app.mount("/", _NoCacheStaticFiles(directory=str(frontend_dir), html=True), name="frontend")
 
     return app
