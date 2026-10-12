@@ -12,7 +12,7 @@ from app.config import Settings, get_settings
 from app.errors import AppError
 from app.models import LlmCall
 
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 
 # ТЗ §10: единственная разрешённая модель. Никогда не заменяется тихо на другую.
 _EXPECTED_PROVIDER = "yandexgpt_pro_5_1"
@@ -250,6 +250,14 @@ class YandexGPTPro51Provider:
         await db.commit()
         return parsed, refused, error
 
+    async def _attempt_with_retry(self, db, *, fallback_model: str | None, **common):
+        """Один повтор на той же модели, если ответ — не валидный JSON (например, неэкранированная
+        кавычка в тексте). Отказ модели и сетевые ошибки повтором не лечатся."""
+        parsed, refused, error = await self._attempt(db, fallback_model=fallback_model, **common)
+        if parsed is None and not refused and error.startswith("invalid_json_or_schema"):
+            parsed, refused, error = await self._attempt(db, fallback_model=fallback_model, **common)
+        return parsed, refused, error
+
     async def _run_stage(
         self,
         db,
@@ -273,12 +281,12 @@ class YandexGPTPro51Provider:
             workspace_id=workspace_id, news_item_id=news_item_id, stage=stage, prompt=prompt,
             result_model=result_model, fixture_response=fixture_response, use_fixture=use_fixture,
         )
-        parsed, refused, error = await self._attempt(db, fallback_model=None, **common)
+        parsed, refused, error = await self._attempt_with_retry(db, fallback_model=None, **common)
         if parsed is not None:
             return parsed
 
         if refused and fallback_model:
-            parsed, refused, error = await self._attempt(db, fallback_model=fallback_model, **common)
+            parsed, refused, error = await self._attempt_with_retry(db, fallback_model=fallback_model, **common)
             if parsed is not None:
                 return parsed
 
@@ -329,10 +337,20 @@ class YandexGPTPro51Provider:
             prompt=prompt, result_model=FactPassportResult, fixture_response=fixture,
         )
 
-    async def draft_independent_text(self, db, *, workspace_id: uuid.UUID, news_item_id: uuid.UUID, title: str, facts_text: str) -> DraftResult:
+    async def draft_independent_text(
+        self, db, *, workspace_id: uuid.UUID, news_item_id: uuid.UUID, title: str, facts_text: str,
+        rewrite_hint: str | None = None,
+    ) -> DraftResult:
+        hint_block = f"{rewrite_hint}\n\n" if rewrite_hint else ""
         prompt = (
             f"[{PROMPT_VERSION}:draft] Напиши самостоятельный текст по фактам "
             f"(не копируя источник дословно):\nЗаголовок: {title}\nФакты: {facts_text}\n\n"
+            "Требования к самостоятельности: ни одно предложение не должно повторять формулировки "
+            "фактов или источника — каждое строй заново, меняй порядок и подачу (от причины к следствию, "
+            "от общего к частному), объединяй и разделяй факты. Дословно допускаются только названия, "
+            "числа, даты, номера дел и ссылки на нормы; не используй подряд больше пяти слов из "
+            "формулировок фактов.\n\n"
+            f"{hint_block}"
             "Стиль — академический юридический: нейтральный, точный, без разговорных оборотов "
             "и эмоциональных оценок; термины употребляй в их устоявшемся правовом значении; "
             "где уместно, ссылайся на вид нормы или акта, не придумывая номеров и дат, которых "

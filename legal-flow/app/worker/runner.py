@@ -23,13 +23,14 @@ from app.config import get_settings
 from app.db import get_session_factory
 from app.models import ScanJob
 from app.models.enums import ScanJobStatus
-from app.services.ai_service import auto_generate_drafts
+from app.services.ai_service import auto_generate_drafts, catch_up_drafts
 from app.services.scan_service import enqueue_due_scheduled_scans, process_scan_job
 
 logger = logging.getLogger("app.worker")
 
 _POLL_INTERVAL_SECONDS = 0.5
 _SCHEDULE_CHECK_INTERVAL_SECONDS = 60.0
+_CATCH_UP_INTERVAL_SECONDS = 600.0  # как часто в паузах догонять черновики без текста
 
 
 async def fetch_next_pending_job_id(db: AsyncSession) -> uuid.UUID | None:
@@ -50,6 +51,7 @@ async def run_forever() -> None:
     session_factory = get_session_factory()
     loop = asyncio.get_event_loop()
     last_schedule_check = 0.0
+    last_catch_up = 0.0
     while True:
         if loop.time() - last_schedule_check >= _SCHEDULE_CHECK_INTERVAL_SECONDS:
             last_schedule_check = loop.time()
@@ -86,6 +88,15 @@ async def run_forever() -> None:
             logger.exception("Ошибка при опросе scan_jobs, повтор через 2с")
             await asyncio.sleep(2)
             continue
+        if not found and loop.time() - last_catch_up >= _CATCH_UP_INTERVAL_SECONDS:
+            last_catch_up = loop.time()
+            try:
+                async with session_factory() as db:
+                    summary = await catch_up_drafts(db)
+                if summary["generated"] or summary["failed"]:
+                    logger.info("догонка черновиков: %s", summary)
+            except Exception:  # noqa: BLE001 -- догонка не должна ронять воркер
+                logger.exception("Ошибка догонки черновиков")
         if not found:
             await asyncio.sleep(_POLL_INTERVAL_SECONDS)
 

@@ -41,3 +41,12 @@ def overlap_record(draft: str, source: str, basis: str) -> dict:
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "stale": False,
     }
+
+
+def verbatim_phrases(draft: str, source: str, min_words: int = 6, limit: int = 8) -> list[str]:
+    """Самые длинные дословные цепочки слов, общие у черновика и оригинала (для подсказки при
+    автоматической переписке: «эти фразы замени»). Слова приведены к нижнему регистру."""
+    dw, sw = _words(draft), _words(source)
+    blocks = difflib.SequenceMatcher(None, dw, sw, autojunk=False).get_matching_blocks()
+    phrases = [" ".join(dw[b.a : b.a + b.size]) for b in blocks if b.size >= min_words]
+    return sorted(phrases, key=len, reverse=True)[:limit]

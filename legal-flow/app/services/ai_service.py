@@ -1,5 +1,7 @@
 import logging
 import uuid
+from collections import Counter
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +13,7 @@ from app.providers.html_source import fetch_article_text
 from app.providers.yandex_gpt import RelevanceResult, YandexGPTPro51Provider
 from app.services import news_service
 from app.services.activity_service import log_activity
-from app.services.text_similarity import overlap_record, text_overlap
+from app.services.text_similarity import overlap_record, text_overlap, verbatim_phrases
 
 logger = logging.getLogger("app.services.ai_service")
 
@@ -59,6 +61,31 @@ async def _fact_source_fragment(db: AsyncSession, news: NewsItem) -> str:
     return full_text
 
 
+async def _rewrite_if_too_close(db: AsyncSession, *, news: NewsItem, draft, facts_for_draft: str, source_fragment: str):
+    """Если черновик слишком близок к оригиналу (≥35% общих фраз или цепочка ≥25 слов), один раз
+    просим модель переписать, перечислив найденные дословные фразы. Оставляем вариант с меньшим
+    совпадением. Только когда модель получила полный текст статьи (по анонсу сравнивать нечего)."""
+    if source_fragment == news.discovery_original_fragment:
+        return draft
+    first = text_overlap(draft.text, source_fragment)
+    if not first["warning"]:
+        return draft
+    phrases = verbatim_phrases(draft.text, source_fragment)
+    hint = (
+        "В предыдущем варианте дословно повторялись фразы: " + "; ".join(f"«{p}»" for p in phrases)
+        + ". Перепиши текст целиком: замени ВСЕ эти фразы собственными формулировками и измени структуру изложения."
+        if phrases else "Предыдущий вариант слишком близок к источнику. Перепиши текст целиком другими словами и в другой структуре."
+    )
+    try:
+        second = await _provider.draft_independent_text(
+            db, workspace_id=news.workspace_id, news_item_id=news.id, title=news.title,
+            facts_text=facts_for_draft, rewrite_hint=hint,
+        )
+    except AppError:
+        return draft  # переписать не вышло — оставляем первый вариант, счётчик покажет сходство
+    return second if text_overlap(second.text, source_fragment)["share"] < first["share"] else draft
+
+
 async def generate_ai_draft(db: AsyncSession, *, news: NewsItem, expected_version: int, user_id: uuid.UUID) -> dict:
     """Runs stages 1-3 (relevance → fact passport → independent draft) and stores the
     result exactly like a manual edit would: as an unreviewed draft. Nothing here ever
@@ -73,9 +100,13 @@ async def generate_ai_draft(db: AsyncSession, *, news: NewsItem, expected_versio
     facts_text = "\n".join(
         f"- {s.statement} [{s.status}] (фрагмент: {s.source_fragment})" for s in facts.statements
     )
+    # В черновик идут только формулировки фактов — без цитат из источника (они остаются в паспорте
+    # фактов для редактора): иначе модель копирует цитаты почти дословно.
+    facts_for_draft = "\n".join(f"- {s.statement} [{s.status}]" for s in facts.statements)
     draft = await _provider.draft_independent_text(
-        db, workspace_id=news.workspace_id, news_item_id=news.id, title=news.title, facts_text=facts_text
+        db, workspace_id=news.workspace_id, news_item_id=news.id, title=news.title, facts_text=facts_for_draft
     )
+    draft = await _rewrite_if_too_close(db, news=news, draft=draft, facts_for_draft=facts_for_draft, source_fragment=source_fragment)
 
     news = await news_service.update_facts(
         db, news=news, expected_version=expected_version, text=facts_text, overall_status=FactStatus.needs_review.value
@@ -121,6 +152,35 @@ _AUTO_DRAFT_MAX_PER_JOB = 10
 _AUTO_DRAFT_STOP_CODES = ("LLM_BUDGET_EXCEEDED", "LLM_NOT_CONFIGURED")
 
 
+async def _owner_id(db: AsyncSession, workspace_id: uuid.UUID) -> uuid.UUID | None:
+    return await db.scalar(
+        select(Membership.user_id)
+        .where(Membership.workspace_id == workspace_id, Membership.role == Role.workspace_owner)
+        .order_by(Membership.created_at)
+        .limit(1)
+    )
+
+
+async def _draft_one(db: AsyncSession, news: NewsItem, owner_id: uuid.UUID, summary: dict) -> None:
+    """Один автоматический черновик с единым учётом исходов (generated / failed / stopped)."""
+    try:
+        await generate_ai_draft(db, news=news, expected_version=news.version, user_id=owner_id)
+        summary["generated"] += 1
+    except AppError as exc:
+        if exc.code in _AUTO_DRAFT_STOP_CODES:
+            summary["stopped"] = exc.code
+            return
+        summary["failed"] += 1
+        await log_activity(
+            db, workspace_id=news.workspace_id, action="auto_draft_failed",
+            details={"news_id": str(news.id), "reason": exc.message[:300]},
+        )
+    except Exception:  # noqa: BLE001 -- один сбой не должен срывать остальные материалы
+        logger.exception("автоматический черновик для %s не удался", news.id)
+        await db.rollback()
+        summary["failed"] += 1
+
+
 async def auto_generate_drafts(db: AsyncSession, job: ScanJob) -> dict:
     """После сбора готовит паспорт фактов и черновик для найденных материалов (флаг потока
     auto_draft). Это ровно та же генерация, что и по кнопке: результат — непроверенный
@@ -132,12 +192,7 @@ async def auto_generate_drafts(db: AsyncSession, job: ScanJob) -> dict:
     flow = await db.get(NewsFlow, job.flow_id)
     if flow is None or not flow.auto_draft or not job.created_news_ids:
         return summary
-    owner_id = await db.scalar(
-        select(Membership.user_id)
-        .where(Membership.workspace_id == flow.workspace_id, Membership.role == Role.workspace_owner)
-        .order_by(Membership.created_at)
-        .limit(1)
-    )
+    owner_id = await _owner_id(db, flow.workspace_id)
     if owner_id is None:
         return summary
 
@@ -146,26 +201,68 @@ async def auto_generate_drafts(db: AsyncSession, job: ScanJob) -> dict:
         if news is None or news.workspace_id != flow.workspace_id or news.status != NewsStatus.DISCOVERED or news.text:
             summary["skipped"] += 1
             continue
-        try:
-            await generate_ai_draft(db, news=news, expected_version=news.version, user_id=owner_id)
-            summary["generated"] += 1
-        except AppError as exc:
-            if exc.code in _AUTO_DRAFT_STOP_CODES:
-                summary["stopped"] = exc.code
-                break
-            summary["failed"] += 1
-            await log_activity(
-                db, workspace_id=flow.workspace_id, action="auto_draft_failed",
-                details={"news_id": news_id, "reason": exc.message[:300]},
-            )
-        except Exception:  # noqa: BLE001 -- один сбой не должен срывать остальные материалы
-            logger.exception("автоматический черновик для %s не удался", news_id)
-            await db.rollback()
-            summary["failed"] += 1
+        await _draft_one(db, news, owner_id, summary)
+        if summary["stopped"]:
+            break
     await log_activity(
         db, workspace_id=flow.workspace_id, action="auto_drafts_completed",
         details={"job_id": str(job.id), "flow_id": str(flow.id), **summary},
     )
+    return summary
+
+
+_CATCH_UP_WINDOW = timedelta(days=7)
+_CATCH_UP_MAX_FAILURES = 2
+
+
+async def catch_up_drafts(db: AsyncSession, *, max_items: int = 5) -> dict:
+    """Догоняет черновики для материалов живого сбора без текста (сбой модели, исчерпанный бюджет,
+    материал найден до включения автоматических черновиков). Только потоки с auto_draft, материалы
+    за последние 7 дней, не больше max_items за проход; материал с двумя неудачами не трогаем —
+    дальше его решает редактор (кнопкой). Вызывается воркером в паузах между заданиями."""
+    summary = {"generated": 0, "failed": 0, "skipped": 0, "stopped": None}
+    since = datetime.now(timezone.utc) - _CATCH_UP_WINDOW
+    candidates = (
+        await db.scalars(
+            select(NewsItem)
+            .join(NewsFlow, NewsFlow.id == NewsItem.flow_id)
+            .where(
+                NewsFlow.auto_draft.is_(True),
+                NewsItem.status == NewsStatus.DISCOVERED,
+                NewsItem.text == "",
+                NewsItem.created_at > since,
+            )
+            .order_by(NewsItem.created_at.desc())
+            .limit(max_items * 4)
+        )
+    ).all()
+    if not candidates:
+        return summary
+    failures: Counter = Counter()
+    events = (
+        await db.scalars(
+            select(ActivityEvent).where(ActivityEvent.action == "auto_draft_failed").order_by(ActivityEvent.created_at.desc()).limit(500)
+        )
+    ).all()
+    for event in events:
+        failures[(event.details or {}).get("news_id")] += 1
+    owners: dict[uuid.UUID, uuid.UUID | None] = {}
+    for news in candidates:
+        if summary["generated"] + summary["failed"] >= max_items or summary["stopped"]:
+            break
+        if failures[str(news.id)] >= _CATCH_UP_MAX_FAILURES:
+            summary["skipped"] += 1
+            continue
+        discovery = await db.get(Discovery, news.discovery_id) if news.discovery_id else None
+        if discovery is None or (discovery.metadata_json or {}).get("label") != "LIVE_LISTING":
+            summary["skipped"] += 1  # демо-материалы не тратят токены
+            continue
+        if news.workspace_id not in owners:
+            owners[news.workspace_id] = await _owner_id(db, news.workspace_id)
+        if owners[news.workspace_id] is None:
+            summary["skipped"] += 1
+            continue
+        await _draft_one(db, news, owners[news.workspace_id], summary)
     return summary
 
 
