@@ -269,10 +269,11 @@ class YandexGPTPro51Provider:
         result_model: type[BaseModel],
         fixture_response: dict,
     ) -> BaseModel:
-        """Основная модель — YandexGPT Pro 5.1. Только если она ОТКАЗАЛАСЬ отвечать (фильтр
-        на чувствительные темы) и явно задана LLM_FALLBACK_MODEL, тот же запрос повторяется
-        на запасной модели. Оба вызова пишутся в llm_calls с точным URI модели; результат
-        помечен model_used. Ошибки формата/сети запасной моделью НЕ «лечатся»."""
+        """Основная модель — YandexGPT Pro 5.1. Только если она не дала годного ответа — ОТКАЗАЛАСЬ
+        (фильтр на чувствительные темы) или дважды подряд вернула невалидный JSON — и явно задана
+        LLM_FALLBACK_MODEL, тот же запрос повторяется на запасной модели. Все вызовы пишутся в
+        llm_calls с точным URI модели; результат помечен model_used. Сетевые ошибки запасной
+        моделью НЕ «лечатся»."""
         use_fixture = self._require_configured_or_fixture()
         fallback_model = None if use_fixture else self._fallback_model()
         await self._enforce_daily_budget(db, workspace_id=workspace_id)
@@ -285,7 +286,8 @@ class YandexGPTPro51Provider:
         if parsed is not None:
             return parsed
 
-        if refused and fallback_model:
+        broken_json = error.startswith("invalid_json_or_schema")
+        if (refused or broken_json) and fallback_model:
             parsed, refused, error = await self._attempt_with_retry(db, fallback_model=fallback_model, **common)
             if parsed is not None:
                 return parsed

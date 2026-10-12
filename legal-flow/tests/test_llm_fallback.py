@@ -107,12 +107,31 @@ async def test_both_models_refuse(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_invalid_json_from_primary_does_not_trigger_fallback(monkeypatch):
+async def test_invalid_json_twice_from_primary_switches_to_fallback(monkeypatch):
     provider, calls = _provider(monkeypatch, primary="это не JSON", fallback_reply=GOOD_JSON)
+    db = FakeDb()
+    result = await _run(provider, db)
+    assert result.model_used == "deepseek-v4-flash"
+    assert calls == {"primary": 2, "fallback": 1}  # повтор на основной, затем запасная модель
+    assert [c.model_uri.rsplit("/", 1)[-1] for c in db.added] == ["yandexgpt-5.1", "yandexgpt-5.1", "deepseek-v4-flash"]
+
+
+@pytest.mark.asyncio
+async def test_invalid_json_without_fallback_model_is_a_structure_error(monkeypatch):
+    provider, calls = _provider(monkeypatch, primary="это не JSON", fallback_model="")
     with pytest.raises(AppError) as exc:
         await _run(provider, FakeDb())
     assert "не прошёл проверку структуры" in exc.value.message
-    assert calls["fallback"] == 0
+    assert calls == {"primary": 2, "fallback": 0}
+
+
+@pytest.mark.asyncio
+async def test_invalid_json_from_both_models_is_a_structure_error(monkeypatch):
+    provider, calls = _provider(monkeypatch, primary="это не JSON", fallback_reply="тоже не JSON")
+    with pytest.raises(AppError) as exc:
+        await _run(provider, FakeDb())
+    assert "не прошёл проверку структуры" in exc.value.message
+    assert calls == {"primary": 2, "fallback": 2}
 
 
 @pytest.mark.asyncio
