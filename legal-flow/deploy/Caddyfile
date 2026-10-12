@@ -1,0 +1,18 @@
+# HTTPS-сертификат Let's Encrypt Caddy получает и продлевает сам — нужно только, чтобы DNS-записи домена
+# указывали на сервер, а порты 80 и 443 были открыты. Домен берётся из переменной DOMAIN (deploy/.env).
+
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy app:8000
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+}
+
+www.{$DOMAIN} {
+	redir https://{$DOMAIN}{uri} permanent
+}
