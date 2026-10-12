@@ -150,21 +150,27 @@ async def update_facts(
     return news
 
 
+def _has_official_document(doc: OfficialDocument | None) -> bool:
+    return doc is not None and bool(doc.url) and bool(doc.title)
+
+
 async def submit_review(
     db: AsyncSession, *, news: NewsItem, reviewer_id: uuid.UUID,
     official_reviewed: bool, facts_reviewed: bool, note: str,
 ) -> NewsItem:
+    # Официальный документ необязателен: если он указан — редактор обязан его проверить;
+    # если не указан — достаточно проверки фактов.
     doc = await db.scalar(select(OfficialDocument).where(OfficialDocument.news_item_id == news.id))
-    if doc is None or not doc.url or not doc.title:
-        raise AppError("OFFICIAL_SOURCE_MISSING", "Сначала укажите официальный документ и его ссылку.")
+    has_doc = _has_official_document(doc)
 
     now = datetime.now(timezone.utc)
-    if official_reviewed and doc.checked_at is None:
+    if has_doc and official_reviewed and doc.checked_at is None:
         doc.checked_at = now
 
     news.official_reviewed = official_reviewed
     news.facts_reviewed = facts_reviewed
-    news.status = NewsStatus.READY_FOR_REVIEW if (official_reviewed and facts_reviewed) else NewsStatus.NEEDS_REVIEW
+    ready = facts_reviewed and (official_reviewed or not has_doc)
+    news.status = NewsStatus.READY_FOR_REVIEW if ready else NewsStatus.NEEDS_REVIEW
 
     db.add(
         EditorReview(
@@ -183,10 +189,13 @@ async def submit_review(
 
 async def approve(db: AsyncSession, *, news: NewsItem) -> NewsItem:
     doc = await db.scalar(select(OfficialDocument).where(OfficialDocument.news_item_id == news.id))
-    if doc is None or not doc.url or not doc.title:
-        raise AppError("OFFICIAL_SOURCE_MISSING", "Официальный документ не указан.")
-    if not news.official_reviewed or not news.facts_reviewed:
-        raise AppError("EDITOR_REVIEW_REQUIRED", "Требуется отметка редактора о проверке документа и фактов.")
+    has_doc = _has_official_document(doc)
+    if not news.facts_reviewed or (has_doc and not news.official_reviewed):
+        raise AppError(
+            "EDITOR_REVIEW_REQUIRED",
+            "Требуется отметка редактора о проверке "
+            + ("документа и фактов." if has_doc else "фактов."),
+        )
     if news.status != NewsStatus.READY_FOR_REVIEW:
         raise AppError("EDITOR_REVIEW_REQUIRED", "Материал должен быть в статусе «готов к проверке».")
 

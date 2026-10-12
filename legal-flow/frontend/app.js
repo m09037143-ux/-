@@ -415,7 +415,7 @@
     if (doc && doc.url) {
       return '<div class="source-box"><strong>Официальный первоисточник</strong><p>' + esc(doc.title) + '</p><a href="' + esc(doc.url) + '" target="_blank" rel="noopener noreferrer">' + esc(doc.url) + '</a><p class="small">' + esc(doc.requisites || '') + '</p><p class="small">' + (doc.checked_at ? 'Проверен редактором ' + new Date(doc.checked_at).toLocaleString('ru-RU') : 'Ещё не подтверждён редактором') + '</p></div>';
     }
-    return '<p class="notice warning">Официальный документ не указан — утверждение недоступно.</p>';
+    return '<p class="notice">Необязательно. Если материал основан на судебном акте или нормативном документе, укажите его: он попадёт в XML и ленту, а редактору останется сверить реквизиты. Без документа достаточно проверки фактов.</p>';
   }
 
   function detailPage() {
@@ -431,7 +431,7 @@
       main = '<p class="notice warning">Внутренний раздел. Текст новостного сайта не переносится в публикацию.</p><div class="source-box"><strong>' + esc(d.discovery_domain) + '</strong><p>' + esc(d.discovery_original_fragment) + '</p></div>';
     } else if (tab === 'Исходный материал') {
       main = '<div id="source-slot"><p class="small">Загрузка…</p></div>';
-    } else if (tab === 'Официальные источники') {
+    } else if (tab === 'Официальный документ (необязательно)') {
       main = officialBlock(d.official_document) + (state.access && state.access.can_mutate
         ? field('official-title', 'Название и реквизиты документа', 'text', d.official_document ? d.official_document.title : '') + field('official-url', 'Ссылка на официальный документ', 'url', d.official_document ? d.official_document.url : '') + field('official-requisites', 'Реквизиты (дело, дата)', 'text', d.official_document ? d.official_document.requisites : '') + button('Сохранить документ', 'saveOfficial')
         : '');
@@ -444,7 +444,7 @@
     } else {
       main = '<div id="history-slot"><p class="small">Загрузка истории…</p></div>';
     }
-    return page(esc(d.title), '<p>' + button('← Новости', 'news') + ' · ' + badge(d.status) + '</p><div class="detail"><div class="card"><div class="tabs">' + ['Текст для публикации', 'Источник обнаружения', 'Исходный материал', 'Официальные источники', 'Паспорт фактов', 'Предпросмотр для читателя', 'История'].map(function (v) { return '<button data-detail="' + v + '" class="' + (v === tab ? 'active' : '') + '">' + v + '</button>'; }).join('') + '</div>' + main + '</div><aside class="card"><h3>Редакторский контроль</h3><p>' + badge(d.status) + '</p><p class="small">Сайт обнаружения: ' + esc(d.discovery_domain) + ' — только редактору</p><p class="small">Официальный документ: ' + (d.official_document && d.official_document.url ? 'указан' : 'не указан') + '</p><p class="small">Реквизиты проверены: ' + (d.official_reviewed ? 'да' : 'нет') + '</p><p class="small">Факты проверены: ' + (d.facts_reviewed ? 'да' : 'нет') + '</p><p class="notice warning">Все решения — только вручную, автопубликации нет.</p><div style="display:grid;gap:9px">' + button(state.editingDraft ? 'Сохранить черновик' : 'Редактировать', state.editingDraft ? 'saveDraft' : 'edit') + (d.status === 'PUBLISHED' ? '' : button('Проверка редактором', 'review', 'secondary') + button('Утвердить материал', 'approve', 'primary') + (d.status === 'APPROVED' ? button('Опубликовать', 'publish', 'primary') : '') + button('Отклонить', 'reject')) + '</div></aside></div>');
+    return page(esc(d.title), '<p>' + button('← Новости', 'news') + ' · ' + badge(d.status) + '</p><div class="detail"><div class="card"><div class="tabs">' + ['Текст для публикации', 'Источник обнаружения', 'Исходный материал', 'Официальный документ (необязательно)', 'Паспорт фактов', 'Предпросмотр для читателя', 'История'].map(function (v) { return '<button data-detail="' + v + '" class="' + (v === tab ? 'active' : '') + '">' + v + '</button>'; }).join('') + '</div>' + main + '</div><aside class="card"><h3>Редакторский контроль</h3><p>' + badge(d.status) + '</p><p class="small">Сайт обнаружения: ' + esc(d.discovery_domain) + ' — только редактору</p><p class="small">Официальный документ: ' + (d.official_document && d.official_document.url ? 'указан' : 'не указан (необязательно)') + '</p>' + (d.official_document && d.official_document.url ? '<p class="small">Реквизиты проверены: ' + (d.official_reviewed ? 'да' : 'нет') + '</p>' : '') + '<p class="small">Факты проверены: ' + (d.facts_reviewed ? 'да' : 'нет') + '</p><p class="notice warning">Все решения — только вручную, автопубликации нет.</p><div style="display:grid;gap:9px">' + button(state.editingDraft ? 'Сохранить черновик' : 'Редактировать', state.editingDraft ? 'saveDraft' : 'edit') + (d.status === 'PUBLISHED' ? '' : button('Проверка редактором', 'review', 'secondary') + button('Утвердить материал', 'approve', 'primary') + (d.status === 'APPROVED' ? button('Опубликовать', 'publish', 'primary') : '') + button('Отклонить', 'reject')) + '</div></aside></div>');
   }
 
   var SOURCE_KIND_LABELS = { builtin: 'готовый разбор сайта', feed: 'RSS/Atom-лента', sitemap: 'новостной sitemap', html: 'список статей (эвристика)' };
@@ -859,9 +859,9 @@
       }
       if (a === 'review') {
         if (!gate()) return;
-        modal('Проверка редактором', '<p>Отметки делает редактор после личной проверки.</p><label style="display:block;margin:12px 0"><input id="check-official" type="checkbox" ' + (state.detail.official_reviewed ? 'checked' : '') + '> Я лично проверил официальный документ</label><label style="display:block;margin:12px 0"><input id="check-facts" type="checkbox" ' + (state.detail.facts_reviewed ? 'checked' : '') + '> Я лично сверил факты и выводы</label>', 'Сохранить отметки', async function (data) {
+        modal('Проверка редактором', '<p>Отметки делает редактор после личной проверки.</p>' + (state.detail.official_document && state.detail.official_document.url ? '<label style="display:block;margin:12px 0"><input id="check-official" type="checkbox" ' + (state.detail.official_reviewed ? 'checked' : '') + '> Я лично проверил официальный документ</label>' : '<p class="small">Официальный документ не указан — он необязателен, достаточно проверить факты.</p>') + '<label style="display:block;margin:12px 0"><input id="check-facts" type="checkbox" ' + (state.detail.facts_reviewed ? 'checked' : '') + '> Я лично сверил факты и выводы</label>', 'Сохранить отметки', async function (data) {
           state.detail = await api('/api/v1/news/' + state.detail.id + '/review', { method: 'POST', body: { official_reviewed: data.official, facts_reviewed: data.facts } });
-          toast(data.official && data.facts ? 'Готово к утверждению' : 'Проверка не завершена'); render();
+          toast(state.detail.status === 'READY_FOR_REVIEW' ? 'Готово к утверждению' : 'Проверка не завершена'); render();
         });
         return;
       }

@@ -20,12 +20,37 @@ async def _seed_one_news_item(authed) -> str:
     return news_list[0]["id"]
 
 
-async def test_cannot_approve_without_official_document_and_review(authed):
+async def test_cannot_approve_without_editor_review(authed):
     news_id = await _seed_one_news_item(authed)
 
     approve = await authed.post(f"/api/v1/news/{news_id}/approve")
     assert approve.status_code == 409
-    assert approve.json()["error"]["code"] == "OFFICIAL_SOURCE_MISSING"
+    assert approve.json()["error"]["code"] == "EDITOR_REVIEW_REQUIRED"
+
+
+async def test_official_document_is_optional_facts_review_is_enough_to_approve_and_publish(authed):
+    news_id = await _seed_one_news_item(authed)
+
+    review = await authed.post(f"/api/v1/news/{news_id}/review", json={"official_reviewed": False, "facts_reviewed": True})
+    assert review.status_code == 200, review.text
+    assert review.json()["status"] == "READY_FOR_REVIEW"
+    approve = await authed.post(f"/api/v1/news/{news_id}/approve")
+    assert approve.status_code == 200, approve.text
+    publish = await authed.post(f"/api/v1/news/{news_id}/publish")
+    assert publish.status_code == 200 and publish.json()["status"] == "PUBLISHED"
+
+
+async def test_if_official_document_is_given_it_must_be_checked_too(authed):
+    news_id = await _seed_one_news_item(authed)
+    doc = await authed.put(
+        f"/api/v1/news/{news_id}/official-document",
+        json={"expected_version": (await authed.get(f"/api/v1/news/{news_id}")).json()["version"], "title": "Определение", "url": "https://kad.arbitr.ru/doc", "requisites": "№ 1"},
+    )
+    assert doc.status_code == 200, doc.text
+    partial = await authed.post(f"/api/v1/news/{news_id}/review", json={"official_reviewed": False, "facts_reviewed": True})
+    assert partial.json()["status"] == "NEEDS_REVIEW"
+    approve = await authed.post(f"/api/v1/news/{news_id}/approve")
+    assert approve.status_code == 409 and approve.json()["error"]["code"] == "EDITOR_REVIEW_REQUIRED"
 
 
 async def test_editing_draft_resets_review_flags_and_bumps_version(authed):
