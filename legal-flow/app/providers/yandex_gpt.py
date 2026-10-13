@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from app.config import Settings, get_settings
 from app.errors import AppError
 from app.models import LlmCall
+from app.providers.llm_targets import ModelTarget, call_model, load_ai_config
 
 PROMPT_VERSION = "v2"
 
@@ -121,22 +122,21 @@ class YandexGPTPro51Provider:
             "YANDEX_MODEL_URI не совпадает с YANDEX_FOLDER_ID) и фикстурный режим выключен.",
         )
 
-    async def _call_real_model(self, *, prompt: str, stage: str) -> str:
-        url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
-        headers = {
-            "Authorization": f"Api-Key {self.settings.yandex_api_key}",
-            "x-folder-id": self.settings.yandex_folder_id,
-        }
-        body = {
-            "modelUri": self.settings.yandex_model_uri,
-            "completionOptions": {"stream": False, "temperature": 0.2, "maxTokens": str(self.settings.llm_max_tokens)},
-            "messages": [{"role": "user", "text": prompt}],
-        }
-        async with httpx.AsyncClient(timeout=self.settings.llm_timeout_seconds) as client:
-            resp = await client.post(url, headers=headers, json=body)
-            resp.raise_for_status()
-            data = resp.json()
-        return data["result"]["alternatives"][0]["message"]["text"]
+    def _env_primary_target(self) -> ModelTarget:
+        """Основная модель из настроек сервера (переменные окружения) — если для этапа в админке ничего не задано."""
+        model = self.settings.yandex_model_uri.rsplit("/", 1)[-1] or _PRIMARY_MODEL
+        return ModelTarget("yandex_native", model, self.settings.yandex_api_key, folder_id=self.settings.yandex_folder_id, source="env")
+
+    def _env_fallback_target(self) -> ModelTarget | None:
+        model = self._fallback_model()
+        if model is None:
+            return None
+        return ModelTarget("yandex_openai", model, self.settings.yandex_api_key, folder_id=self.settings.yandex_folder_id, source="env")
+
+    async def _call_target(self, target: ModelTarget, *, prompt: str, stage: str) -> str:
+        return await call_model(
+            target, prompt=prompt, timeout=self.settings.llm_timeout_seconds, max_tokens=self.settings.llm_max_tokens
+        )
 
     def _fallback_model(self) -> str | None:
         model = (self.settings.llm_fallback_model or "").strip()
@@ -149,23 +149,6 @@ class YandexGPTPro51Provider:
                 f"({', '.join(sorted(ALLOWED_FALLBACK_MODELS))}).",
             )
         return model
-
-    async def _call_fallback_model(self, *, prompt: str, stage: str, model: str) -> str:
-        """Запасная модель в том же облаке и под тем же ключом, но через OpenAI-совместимый
-        эндпоинт Яндекса (открытые модели недоступны в нативном API)."""
-        url = "https://llm.api.cloud.yandex.net/v1/chat/completions"
-        headers = {"Authorization": f"Api-Key {self.settings.yandex_api_key}"}
-        body = {
-            "model": f"gpt://{self.settings.yandex_folder_id}/{model}",
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.2,
-            "max_tokens": self.settings.llm_max_tokens,
-        }
-        async with httpx.AsyncClient(timeout=self.settings.llm_timeout_seconds) as client:
-            resp = await client.post(url, headers=headers, json=body)
-            resp.raise_for_status()
-            data = resp.json()
-        return data["choices"][0]["message"].get("content") or ""
 
     async def _enforce_daily_budget(self, db, *, workspace_id: uuid.UUID) -> None:
         today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -192,7 +175,7 @@ class YandexGPTPro51Provider:
         result_model: type[BaseModel],
         fixture_response: dict,
         use_fixture: bool,
-        fallback_model: str | None,
+        target: ModelTarget | None,
     ) -> tuple[BaseModel | None, bool, str]:
         """Один вызов модели (основной или запасной) + строка в llm_calls. Возвращает
         (результат или None, «модель отказалась», текст ошибки)."""
@@ -202,21 +185,17 @@ class YandexGPTPro51Provider:
         raw_text = ""
         refused = False
         parsed = None
-        model_name = fallback_model or _PRIMARY_MODEL
+        model_name = target.model if target is not None else _PRIMARY_MODEL
         if use_fixture:
             model_uri_logged = f"FIXTURE:{self.settings.yandex_model_uri or 'yandexgpt-5.1'}"
-        elif fallback_model:
-            model_uri_logged = f"gpt://{self.settings.yandex_folder_id}/{fallback_model}"
         else:
-            model_uri_logged = self.settings.yandex_model_uri
+            model_uri_logged = target.log_uri
 
         try:
             if use_fixture:
                 raw_text = json.dumps(fixture_response, ensure_ascii=False)
-            elif fallback_model:
-                raw_text = await self._call_fallback_model(prompt=prompt, stage=stage, model=fallback_model)
             else:
-                raw_text = await self._call_real_model(prompt=prompt, stage=stage)
+                raw_text = await self._call_target(target, prompt=prompt, stage=stage)
             if not use_fixture and _looks_like_refusal(raw_text):
                 refused = True
                 error = "model_refused: модель отказалась обрабатывать материал"
@@ -250,12 +229,12 @@ class YandexGPTPro51Provider:
         await db.commit()
         return parsed, refused, error
 
-    async def _attempt_with_retry(self, db, *, fallback_model: str | None, **common):
+    async def _attempt_with_retry(self, db, *, target: ModelTarget | None, **common):
         """Один повтор на той же модели, если ответ — не валидный JSON (например, неэкранированная
         кавычка в тексте). Отказ модели и сетевые ошибки повтором не лечатся."""
-        parsed, refused, error = await self._attempt(db, fallback_model=fallback_model, **common)
+        parsed, refused, error = await self._attempt(db, target=target, **common)
         if parsed is None and not refused and error.startswith("invalid_json_or_schema"):
-            parsed, refused, error = await self._attempt(db, fallback_model=fallback_model, **common)
+            parsed, refused, error = await self._attempt(db, target=target, **common)
         return parsed, refused, error
 
     async def _run_stage(
@@ -269,26 +248,33 @@ class YandexGPTPro51Provider:
         result_model: type[BaseModel],
         fixture_response: dict,
     ) -> BaseModel:
-        """Основная модель — YandexGPT Pro 5.1. Только если она не дала годного ответа — ОТКАЗАЛАСЬ
-        (фильтр на чувствительные темы) или дважды подряд вернула невалидный JSON — и явно задана
-        LLM_FALLBACK_MODEL, тот же запрос повторяется на запасной модели. Все вызовы пишутся в
-        llm_calls с точным URI модели; результат помечен model_used. Сетевые ошибки запасной
-        моделью НЕ «лечатся»."""
-        use_fixture = self._require_configured_or_fixture()
-        fallback_model = None if use_fixture else self._fallback_model()
+        """Модель этапа берётся из админки (подключение + модель по этапам); если для этапа там ничего не
+        задано — из настроек сервера (YandexGPT Pro 5.1 по переменным окружения, прежнее поведение со
+        всеми его проверками). Только если основная модель не дала годного ответа — ОТКАЗАЛАСЬ (фильтр на
+        чувствительные темы) или дважды подряд вернула невалидный JSON — и задана запасная (в админке или
+        LLM_FALLBACK_MODEL), тот же запрос повторяется на запасной. Все вызовы пишутся в llm_calls с точным
+        URI модели (без ключа); результат помечен model_used. Сетевые ошибки запасной моделью НЕ «лечатся»."""
+        ai_config = await load_ai_config()
+        primary = ai_config.for_call_stage(stage)
+        if primary is not None:
+            use_fixture = False
+        else:
+            use_fixture = self._require_configured_or_fixture()
+            primary = None if use_fixture else self._env_primary_target()
+        fallback = None if use_fixture else (ai_config.fallback or self._env_fallback_target())
         await self._enforce_daily_budget(db, workspace_id=workspace_id)
 
         common = dict(
             workspace_id=workspace_id, news_item_id=news_item_id, stage=stage, prompt=prompt,
             result_model=result_model, fixture_response=fixture_response, use_fixture=use_fixture,
         )
-        parsed, refused, error = await self._attempt_with_retry(db, fallback_model=None, **common)
+        parsed, refused, error = await self._attempt_with_retry(db, target=primary, **common)
         if parsed is not None:
             return parsed
 
         broken_json = error.startswith("invalid_json_or_schema")
-        if (refused or broken_json) and fallback_model:
-            parsed, refused, error = await self._attempt_with_retry(db, fallback_model=fallback_model, **common)
+        if (refused or broken_json) and fallback is not None:
+            parsed, refused, error = await self._attempt_with_retry(db, target=fallback, **common)
             if parsed is not None:
                 return parsed
 

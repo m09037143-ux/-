@@ -1,12 +1,12 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
-from app.models.common import UUIDPk
+from app.models.common import TimestampMixin, UUIDPk
 from app.models.enums import ExportStatus
 
 
@@ -78,3 +78,37 @@ class ApiKey(Base, UUIDPk):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AiConnection(Base, UUIDPk, TimestampMixin):
+    """Подключение к ИИ-сервису, заведённое админом платформы: Яндекс Облако (каталог + ключ) или любой
+    OpenAI-совместимый сервис (адрес API + ключ). Ключ хранится только зашифрованным (app/secrets_box.py),
+    в key_hint — маска из последних четырёх символов для списка."""
+
+    __tablename__ = "ai_connections"
+
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)  # yandex | openai_compatible
+    base_url: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    folder_id: Mapped[str] = mapped_column(String(100), nullable=False, default="")
+    api_key_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    key_hint: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    last_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_check_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    last_check_note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+
+class AiStageModel(Base, UUIDPk, TimestampMixin):
+    """Какая модель на каком подключении работает на этапе: relevance (отбор по теме), facts (паспорт фактов),
+    draft (черновик), fallback (запасная при отказе/битом JSON). Нет строки — этап работает по настройкам
+    сервера (переменные окружения)."""
+
+    __tablename__ = "ai_stage_models"
+
+    stage: Mapped[str] = mapped_column(String(20), nullable=False, unique=True)
+    connection_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ai_connections.id", ondelete="RESTRICT"), nullable=False
+    )
+    model: Mapped[str] = mapped_column(String(200), nullable=False)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)

@@ -106,6 +106,7 @@
     plansList: [],
     ordersList: [],
     adminUsers: null,
+    aiAdmin: null,
     adminForbidden: null, // null = ещё не проверено, true/false = результат последней проверки
     adminTab: 'Пользователи',
     settingsTab: 'Профиль',
@@ -512,6 +513,33 @@
     ) + '</div>');
   }
 
+  var AI_STAGE_TITLES = { relevance: 'Отбор по теме', facts: 'Паспорт фактов', draft: 'Черновик', fallback: 'Запасная модель (при отказе или битом ответе)' };
+  var AI_SOURCE_LABELS = { admin: 'из админки', env: 'настройки сервера', fixture: 'демо-режим', not_configured: 'не настроено', none: 'не задана' };
+
+  function aiAdminHtml() {
+    var ai = state.aiAdmin;
+    if (!ai) return '<p class="small">Загрузка настроек ИИ…</p>';
+    var html = '';
+    if (!ai.encryption_configured) {
+      html += '<p class="notice warning"><strong>Ключи пока нельзя сохранять.</strong> На сервере не задан ключ шифрования <code>SECRETS_ENCRYPTION_KEY</code>. Сгенерируйте его командой <code>python3 -c "import base64,os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"</code>, добавьте в переменные окружения сервера и перезапустите сервис. Пока работают настройки сервера.</p>';
+    }
+    html += '<h3>Подключения</h3><p class="small">Сервис, ключ и (для Яндекса) каталог. Ключ показывается один раз при вводе, дальше виден только его конец; в базе он хранится зашифрованным.</p>';
+    html += ai.connections.length ? '<table class="table"><thead><tr><th>Название</th><th>Тип</th><th>Адрес / каталог</th><th>Ключ</th><th>Проверка</th><th></th></tr></thead><tbody>' + ai.connections.map(function (c) {
+      var check = c.last_check_at ? '<span class="status ' + (c.last_check_ok ? 'ready' : 'danger') + '">' + (c.last_check_ok ? 'работает' : 'ошибка') + '</span><br><span class="small">' + esc(c.last_check_note) + '</span>' : '<span class="small">не проверялось</span>';
+      return '<tr><td>' + esc(c.name) + '</td><td>' + (c.kind === 'yandex' ? 'Яндекс Облако' : 'OpenAI-совместимый') + '</td><td>' + esc(c.kind === 'yandex' ? c.folder_id : c.base_url) + '</td><td><code>' + esc(c.key_hint) + '</code></td><td>' + check + '</td><td style="white-space:nowrap">' + button('Проверить', 'aiTestConn', '', 'data-id="' + c.id + '"') + ' ' + button('Изменить', 'aiEditConn', '', 'data-id="' + c.id + '"') + ' ' + button('Удалить', 'aiDeleteConn', '', 'data-id="' + c.id + '"') + '</td></tr>';
+    }).join('') + '</tbody></table>' : '<p class="small">Подключений пока нет — работают настройки сервера.</p>';
+    html += '<div style="margin:12px 0">' + button('Добавить подключение', 'aiAddConn', 'primary') + '</div>';
+    html += '<h3 style="margin-top:22px">Модели по этапам</h3><p class="small">Для каждого этапа выберите подключение и модель. «По настройкам сервера» — этап работает так, как задано переменными окружения. Изменения вступают в силу в течение полуминуты, перезапуск не нужен.</p>';
+    html += '<datalist id="ai-model-list">' + (ai.model_suggestions || []).map(function (m) { return '<option value="' + esc(m) + '">'; }).join('') + '</datalist>';
+    html += '<div style="display:grid;gap:14px">' + ai.stages.map(function (st) {
+      var eff = (ai.effective || []).find(function (e) { return e.stage === st.stage; }) || {};
+      var opts = '<option value="">— по настройкам сервера —</option>' + ai.connections.map(function (c) { return '<option value="' + c.id + '"' + (st.connection_id === c.id ? ' selected' : '') + '>' + esc(c.name) + '</option>'; }).join('');
+      return '<div class="card"><strong>' + esc(AI_STAGE_TITLES[st.stage] || st.stage) + '</strong><p class="small" style="margin:4px 0 10px">Сейчас: ' + esc(AI_SOURCE_LABELS[eff.source] || eff.source || '—') + (eff.model ? ' · ' + esc(eff.model) : '') + (eff.connection_name ? ' (' + esc(eff.connection_name) + ')' : '') + '</p><div class="grid2"><div class="field"><label for="ai-conn-' + st.stage + '">Подключение</label><select id="ai-conn-' + st.stage + '">' + opts + '</select></div><div class="field"><label for="ai-model-' + st.stage + '">Модель</label><input id="ai-model-' + st.stage + '" list="ai-model-list" value="' + esc(st.model || '') + '" placeholder="например, deepseek-v4-flash"></div></div></div>';
+    }).join('') + '</div><div style="margin-top:14px">' + button('Сохранить модели', 'saveAiStages', 'primary') + '</div>';
+    html += '<p class="small" style="margin-top:14px">Совет: сначала нажмите «Проверить» у подключения с нужной моделью, потом назначайте её на этап. Для Яндекса модели YandexGPT идут через нативный API, остальные (DeepSeek, gpt-oss, Qwen) — через OpenAI-совместимый. Для другого сервиса нужен адрес вида <code>https://…/v1</code> и имя модели из его документации.</p>';
+    return html;
+  }
+
   function adminPage() {
     if (state.adminForbidden === null) {
       return page('Администрирование', '<div class="card"><p class="small">Проверяю права доступа…</p></div>');
@@ -519,9 +547,10 @@
     if (state.adminForbidden) {
       return page('Администрирование', '<div class="card"><p class="notice warning">Раздел доступен только администраторам платформы (platform_admin). Ваша роль — участник рабочего пространства, а не оператор платформы.</p></div>');
     }
-    return page('Администрирование', '<div class="grid3"><div class="card"><h3>Пользователи платформы</h3><strong>' + (state.adminUsers ? state.adminUsers.length : '—') + '</strong></div><div class="card"><h3>Материалов в вашем потоке</h3><strong>' + state.news.length + '</strong></div><div class="card"><h3>Экспортов</h3><strong>' + state.exportsList.length + '</strong></div></div><div class="tabs">' + ['Пользователи', 'Тарифы', 'События'].map(function (v) { return '<button data-admin="' + v + '" class="' + (v === state.adminTab ? 'active' : '') + '">' + v + '</button>'; }).join('') + '</div><div class="card">' + (
+    return page('Администрирование', '<div class="grid3"><div class="card"><h3>Пользователи платформы</h3><strong>' + (state.adminUsers ? state.adminUsers.length : '—') + '</strong></div><div class="card"><h3>Материалов в вашем потоке</h3><strong>' + state.news.length + '</strong></div><div class="card"><h3>Экспортов</h3><strong>' + state.exportsList.length + '</strong></div></div><div class="tabs">' + ['Пользователи', 'Тарифы', 'События', 'ИИ-модели'].map(function (v) { return '<button data-admin="' + v + '" class="' + (v === state.adminTab ? 'active' : '') + '">' + v + '</button>'; }).join('') + '</div><div class="card">' + (
       state.adminTab === 'Пользователи' ? (state.adminUsers || []).map(function (u) { return '<p>' + esc(u.email) + (u.is_platform_admin ? ' · platform_admin' : '') + '</p>'; }).join('')
       : state.adminTab === 'Тарифы' ? (state.plansList || []).map(function (p) { return '<p>' + esc(p.name) + ' — ' + p.price_rub.toLocaleString('ru-RU') + ' ₽/мес.</p>'; }).join('')
+      : state.adminTab === 'ИИ-модели' ? aiAdminHtml()
       : (state.activityList || []).map(function (e) { return '<p>' + esc(e.action) + '</p>'; }).join('')
     ) + '</div>');
   }
@@ -651,6 +680,7 @@
         try { state.adminUsers = await api('/api/v1/admin/users'); state.adminForbidden = false; }
         catch (e) { if (e.code === 'FORBIDDEN') { state.adminForbidden = true; } else throw e; }
         state.plansList = await api('/api/v1/plans');
+        if (state.adminForbidden === false) { try { state.aiAdmin = await api('/api/v1/admin/ai'); } catch (e) { state.aiAdmin = null; } }
         if (!state.activityList.length) state.activityList = await api('/api/v1/activity');
       }
       render();
@@ -735,6 +765,7 @@
         facts: !!(document.getElementById('check-facts') || {}).checked,
         newPassword: value('modal-new-password'),
         keyName: value('modal-key-name'),
+        ai: { name: value('ai-name'), kind: value('ai-kind'), folder: value('ai-folder'), url: value('ai-url'), key: value('ai-key'), model: value('ai-test-model') },
         rights: !!(document.getElementById('modal-rights') || {}).checked
       };
       closeModal();
@@ -922,6 +953,63 @@
         });
         return;
       }
+      if (a === 'aiAddConn' || a === 'aiEditConn') {
+        if (!gate()) return;
+        var connId = b.dataset.id, cur = connId ? state.aiAdmin.connections.find(function (c) { return c.id === connId; }) : null;
+        var kindSel = cur ? '<p class="small">Тип: ' + (cur.kind === 'yandex' ? 'Яндекс Облако' : 'OpenAI-совместимый') + ' (не меняется)</p>' : '<div class="field"><label for="ai-kind">Тип сервиса</label><select id="ai-kind"><option value="yandex">Яндекс Облако</option><option value="openai_compatible">Другой (OpenAI-совместимый)</option></select></div>';
+        var isYandex = cur ? cur.kind === 'yandex' : true;
+        modal(cur ? 'Изменить подключение' : 'Новое подключение',
+          field('ai-name', 'Название (для вас)', 'text', cur ? cur.name : '') + kindSel
+          + '<div id="ai-folder-wrap"' + (isYandex ? '' : ' style="display:none"') + '>' + field('ai-folder', 'Идентификатор каталога Яндекс Облака', 'text', cur ? cur.folder_id : '') + '</div>'
+          + '<div id="ai-url-wrap"' + (isYandex ? ' style="display:none"' : '') + '>' + field('ai-url', 'Адрес API (https://…/v1)', 'text', cur ? cur.base_url : '') + '</div>'
+          + field('ai-key', cur ? 'Новый API-ключ (оставьте пустым, чтобы не менять)' : 'API-ключ', 'password', '')
+          + '<p class="small">Ключ шифруется и больше не показывается. Не присылайте ключи в чат и почту.</p>',
+          'Сохранить', async function (data) {
+            var d = data.ai, kind = cur ? cur.kind : d.kind;
+            if (!d.name) return toast('Укажите название', true);
+            var body = { name: d.name };
+            if (kind === 'yandex') body.folder_id = d.folder; else body.base_url = d.url;
+            if (d.key) body.api_key = d.key; else if (!cur) return toast('Укажите API-ключ', true);
+            if (cur) await api('/api/v1/admin/ai/connections/' + cur.id, { method: 'PATCH', body: body });
+            else { body.kind = kind; await api('/api/v1/admin/ai/connections', { method: 'POST', body: body }); }
+            state.aiAdmin = await api('/api/v1/admin/ai'); toast('Подключение сохранено'); render();
+          });
+        return;
+      }
+      if (a === 'aiDeleteConn') {
+        if (!gate()) return;
+        var delConn = b.dataset.id;
+        modal('Удалить подключение?', '<p>Ключ будет стёрт из базы. Если подключение назначено на этап, сначала переназначьте этап.</p>', 'Удалить', async function () {
+          await api('/api/v1/admin/ai/connections/' + delConn, { method: 'DELETE' });
+          state.aiAdmin = await api('/api/v1/admin/ai'); toast('Подключение удалено'); render();
+        });
+        return;
+      }
+      if (a === 'aiTestConn') {
+        if (!gate()) return;
+        var testId = b.dataset.id;
+        modal('Проверить подключение', '<p class="small">Будет отправлен один крошечный платный запрос выбранной модели.</p><datalist id="ai-model-list">' + ((state.aiAdmin && state.aiAdmin.model_suggestions) || []).map(function (m) { return '<option value="' + esc(m) + '">'; }).join('') + '</datalist><div class="field"><label for="ai-test-model">Модель</label><input id="ai-test-model" list="ai-model-list" placeholder="например, deepseek-v4-flash"></div>', 'Проверить', async function (data) {
+          if (!data.ai.model) return toast('Укажите модель', true);
+          toast('Проверяем подключение…');
+          var res = await api('/api/v1/admin/ai/connections/' + testId + '/test', { method: 'POST', body: { model: data.ai.model } });
+          state.aiAdmin = await api('/api/v1/admin/ai');
+          toast((res.ok ? 'Работает' : 'Не прошла') + ' (' + res.latency_ms + ' мс): ' + res.note, !res.ok); render();
+        });
+        return;
+      }
+      if (a === 'saveAiStages') {
+        if (!gate()) return;
+        var stages = {};
+        for (var si = 0; si < state.aiAdmin.stages.length; si++) {
+          var stg = state.aiAdmin.stages[si].stage, cid = value('ai-conn-' + stg), mdl = value('ai-model-' + stg);
+          if (!cid && mdl) return toast('«' + AI_STAGE_TITLES[stg] + '»: выберите подключение или очистите модель', true);
+          if (cid && !mdl) return toast('«' + AI_STAGE_TITLES[stg] + '»: укажите модель', true);
+          stages[stg] = cid ? { connection_id: cid, model: mdl } : null;
+        }
+        state.aiAdmin = await api('/api/v1/admin/ai/stages', { method: 'PUT', body: { stages: stages } });
+        toast('Модели по этапам сохранены'); render();
+        return;
+      }
       if (a === 'exportDownload') {
         if (!gate()) return;
         var dlName = value('xml-name') || 'legal-news.xml';
@@ -1000,6 +1088,15 @@
         .catch(function (err) { toast(err.message, true); e.target.checked = !checked; });
     }
     if (e.target.name === 'limit') state.setupLimit = Number(e.target.value);
+  });
+
+  document.addEventListener('change', function (e) {
+    if (e.target.id === 'ai-kind') {
+      var yandex = e.target.value === 'yandex';
+      var fw = document.getElementById('ai-folder-wrap'), uw = document.getElementById('ai-url-wrap');
+      if (fw) fw.style.display = yandex ? '' : 'none';
+      if (uw) uw.style.display = yandex ? 'none' : '';
+    }
   });
 
   document.addEventListener('submit', async function (e) {

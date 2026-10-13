@@ -9,7 +9,7 @@ from app.models.editorial import (
     NewsVersion,
     EditorReview,
 )
-from app.models.ops import LlmCall, Export, ActivityEvent, ApiKey
+from app.models.ops import LlmCall, Export, ActivityEvent, ApiKey, AiConnection, AiStageModel
 
 __all__ = [
     "User",
@@ -37,4 +37,6 @@ __all__ = [
     "Export",
     "ActivityEvent",
     "ApiKey",
+    "AiConnection",
+    "AiStageModel",
 ]

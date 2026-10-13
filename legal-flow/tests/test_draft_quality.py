@@ -6,6 +6,8 @@ import pytest
 from app.config import Settings
 from app.errors import AppError
 from app.models import Discovery
+from app.providers import yandex_gpt
+from app.providers.llm_targets import AiConfig
 from app.providers.yandex_gpt import DraftResult, YandexGPTPro51Provider
 from app.services import ai_service
 from app.services.text_similarity import verbatim_phrases
@@ -41,13 +43,17 @@ def _provider(monkeypatch, replies):
     provider = YandexGPTPro51Provider(settings)
     calls = {"n": 0, "prompts": []}
 
-    async def fake_call(*, prompt, stage):
+    async def fake_call(target, *, prompt, stage):
         calls["prompts"].append(prompt)
         reply = replies[min(calls["n"], len(replies) - 1)]
         calls["n"] += 1
         return reply
 
-    monkeypatch.setattr(provider, "_call_real_model", fake_call)
+    async def no_admin_config(**kwargs):
+        return AiConfig()
+
+    monkeypatch.setattr(provider, "_call_target", fake_call)
+    monkeypatch.setattr(yandex_gpt, "load_ai_config", no_admin_config)
     return provider, calls
 
 

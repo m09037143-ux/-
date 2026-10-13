@@ -16,6 +16,7 @@ os.environ.setdefault("CSRF_SECRET", "test-secret")
 os.environ.setdefault("PAYMENT_PROVIDER", "fake")
 os.environ.setdefault("PAYMENT_WEBHOOK_SECRET", "test-webhook-secret")
 os.environ.setdefault("LLM_FIXTURE_MODE", "true")
+os.environ.setdefault("SECRETS_ENCRYPTION_KEY", "dGVzdC1vbmx5LWtleS1mb3Itc2VjcmV0cy1ib3gtMDE=")  # только для тестов
 os.environ.setdefault("SOURCE_FIXTURE_MODE", "true")
 
 from app.config import get_settings  # noqa: E402

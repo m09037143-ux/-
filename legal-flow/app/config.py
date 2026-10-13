@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     # темы: «Я не могу обсуждать эту тему»). Пусто — запасной модели нет. Значение должно быть
     # из явного списка разрешённых в app/providers/yandex_gpt.py; тот же ключ и каталог Яндекса.
     llm_fallback_model: str = ""
+    # Ключ шифрования секретов, которые админ сохраняет в интерфейсе (API-ключи ИИ). См. app/secrets_box.py.
+    secrets_encryption_key: str = ""
 
     payment_provider: str = "not_configured"
     payment_webhook_secret: str = ""

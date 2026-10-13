@@ -4,6 +4,8 @@ import pytest
 
 from app.config import Settings
 from app.errors import AppError
+from app.providers import yandex_gpt
+from app.providers.llm_targets import AiConfig
 from app.providers.yandex_gpt import DraftResult, YandexGPTPro51Provider
 
 REFUSAL = "Я не могу обсуждать эту тему. Давайте поговорим о чём-нибудь ещё."
@@ -39,17 +41,19 @@ def _provider(monkeypatch, *, primary, fallback_reply=None, fallback_model="deep
     provider = YandexGPTPro51Provider(settings)
     calls = {"primary": 0, "fallback": 0}
 
-    async def fake_primary(*, prompt, stage):
-        calls["primary"] += 1
-        return primary
-
-    async def fake_fallback(*, prompt, stage, model):
-        calls["fallback"] += 1
-        assert model == "deepseek-v4-flash"
+    async def fake_call(target, *, prompt, stage):
+        if target.kind == "yandex_native":  # основная модель из настроек сервера
+            calls["primary"] += 1
+            return primary
+        calls["fallback"] += 1  # запасная — через OpenAI-совместимый эндпоинт Яндекса
+        assert target.model == "deepseek-v4-flash"
         return fallback_reply
 
-    monkeypatch.setattr(provider, "_call_real_model", fake_primary)
-    monkeypatch.setattr(provider, "_call_fallback_model", fake_fallback)
+    async def no_admin_config(**kwargs):
+        return AiConfig()  # в админке ничего не задано — работают настройки сервера
+
+    monkeypatch.setattr(provider, "_call_target", fake_call)
+    monkeypatch.setattr(yandex_gpt, "load_ai_config", no_admin_config)
     return provider, calls
 
 

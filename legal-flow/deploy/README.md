@@ -72,6 +72,7 @@ cp .env.production.example .env && chmod 600 .env
 ```
 Откройте `.env` (`nano .env`) и заполните:
 - `POSTGRES_PASSWORD` и `CSRF_SECRET` — случайные значения: `openssl rand -hex 32` (два раза, по значению на переменную).
+- `SECRETS_ENCRYPTION_KEY` — ключ шифрования ИИ-ключей из админки: `python3 -c "import base64,os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"`. **Сохраните копию отдельно** (менеджер паролей): без него ключи, введённые в админке, не расшифровать.
 - `YANDEX_FOLDER_ID`, `YANDEX_MODEL_URI`, `YANDEX_API_KEY` — **те же значения, что сейчас на Render** (скопируйте их из панели Render вручную; в чат/почту их отправлять не нужно).
 Остальное уже задано под `pravpotok.ru`.
 

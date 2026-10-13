@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
 from app.errors import AppError, app_error_handler, request_validation_error_handler
-from app.routers import access, activity, admin, ai, api_keys, auth, billing, exports, feed, flows, news
+from app.routers import access, activity, admin, admin_ai, ai, api_keys, auth, billing, exports, feed, flows, news
 
 
 class _NoCacheStaticFiles(StaticFiles):
@@ -51,6 +51,7 @@ def create_app() -> FastAPI:
     app.include_router(api_keys.router)
     app.include_router(feed.router)
     app.include_router(admin.router)
+    app.include_router(admin_ai.router)
 
     @app.get("/health/live")
     async def health_live():
