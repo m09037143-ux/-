@@ -91,14 +91,14 @@ cp .env.production.example .env && chmod 600 .env
 ## 8. Перенос данных с Render (чтобы остались пользователи, материалы, ключи)
 Если начинать с пустой базы — пропустите шаг и сразу перейдите к шагу 9.
 
-1. Панель Render → ваша база PostgreSQL → запишите **версию** PostgreSQL. В `docker-compose.prod.yml` образ `postgres:17-alpine` — версия не должна быть ниже версии на Render; если на Render 18, замените тег на `postgres:18-alpine` (и в этом случае проверьте путь тома по заметке в документации образа).
+1. Панель Render → ваша база PostgreSQL → запишите **версию** PostgreSQL. В `docker-compose.prod.yml` стоит `postgres:18-alpine` (на Render сейчас PostgreSQL 18); версия сервера не должна быть ниже версии на Render. Если у вас на Render другая версия, поменяйте тег образа (для версий до 18 том монтируется на `/var/lib/postgresql/data`, для 18 и новее — на `/var/lib/postgresql`) и в команде `pg_dump` ниже замените `postgres:18-alpine` на ту же версию.
 2. На странице базы возьмите **External Database URL** (Connect → External). Если Render запрещает внешний доступ, добавьте IP вашего сервера в «Access Control».
 3. На сервере (адрес вводится скрытно и не остаётся в истории команд):
 ```
 read -rs RENDER_DB_URL && export RENDER_DB_URL
 ```
 ```
-docker run --rm -e RENDER_DB_URL postgres:17-alpine sh -c 'pg_dump --no-owner --no-acl "$RENDER_DB_URL"' | gzip > ~/render.sql.gz && unset RENDER_DB_URL
+docker run --rm -e RENDER_DB_URL postgres:18-alpine sh -c 'pg_dump --no-owner --no-acl "$RENDER_DB_URL"' | gzip > ~/render.sql.gz && unset RENDER_DB_URL
 ```
 Размер `~/render.sql.gz` должен быть больше нуля (`ls -lh ~/render.sql.gz`).
 

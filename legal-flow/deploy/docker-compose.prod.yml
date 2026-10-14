@@ -65,14 +65,16 @@ services:
   db:
     # Версия сервера должна быть НЕ НИЖЕ версии базы на Render (дамп новее сервера не восстановится);
     # версию Render смотрите на странице базы в панели Render (README, шаг про перенос данных).
-    image: postgres:17-alpine
+    # База на Render — PostgreSQL 18, поэтому здесь 18. Образ 18+ хранит данные в /var/lib/postgresql/18/docker,
+    # том монтируется на /var/lib/postgresql (а не на .../data, как у версий до 18).
+    image: postgres:18-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: pravovoy_potok
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: pravovoy_potok
     volumes:
-      - pp_db_data:/var/lib/postgresql/data
+      - pp_db_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U pravovoy_potok -d pravovoy_potok"]
       interval: 10s
