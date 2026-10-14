@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from cryptography.fernet import Fernet
+from pydantic import ValidationError
 
 from app import secrets_box
 from app.config import Settings, get_settings
@@ -12,7 +13,7 @@ from app.models import AiConnection, AiStageModel
 from app.providers import llm_targets, yandex_gpt
 from app.providers.llm_targets import AiConfig, ModelTarget, build_target, call_model, validate_base_url
 from app.providers.yandex_gpt import DraftResult, FactPassportResult, YandexGPTPro51Provider
-from app.schemas.admin_ai import ConnectionCreate, ConnectionUpdate, StageIn, StagesUpdate
+from app.schemas.admin_ai import ConnectionCreate, ConnectionUpdate, StageIn, StagesUpdate, YandexKeyRequest
 from app.services import ai_admin_service
 
 SECRET = "sk-test-SECRET-1234567890abcd"
@@ -306,8 +307,13 @@ class MemDb:
     async def delete(self, obj):
         (self.conns if isinstance(obj, AiConnection) else self.stages).pop(obj.id, None)
 
+    async def flush(self):
+        pass
+
     async def scalar(self, stmt):
         params = stmt.compile().params
+        if "FROM ai_connections" in str(stmt):  # основное подключение Яндекса (replace_yandex_key)
+            return next((c for c in self.conns.values() if c.kind == "yandex"), None)
         if "FROM ai_stage_models" in str(stmt):
             stage = next(v for k, v in params.items() if k.startswith("stage_"))
             return next((r for r in self.stages.values() if r.stage == stage), None)
@@ -462,6 +468,121 @@ async def test_test_connection_reports_success_and_readable_errors_without_leaki
     down = await ai_admin_service.test_connection(service.db, connection_id=conn.id, model="yandexgpt-5.1", user_id=service.user, workspace_id=service.ws)
     assert down.ok is False and "недоступен" in down.note
     assert SECRET not in str(service.events) and SECRET not in conn.last_check_note and SECRET not in bad.model_dump_json()
+
+
+# ---------------- замена ключа YandexGPT одним действием ----------------
+
+NEW_KEY = "AQVN-new-key-1234567890abcdef"
+
+
+def _fake_call(results):
+    seen = []
+
+    async def fake_call(target, *, prompt, timeout, max_tokens, temperature=0.2):
+        seen.append(target)
+        result = next(results)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    return fake_call, seen
+
+
+@pytest.mark.asyncio
+async def test_replace_key_is_checked_first_and_nothing_changes_when_it_fails(service, monkeypatch):
+    fake, seen = _fake_call(iter([httpx.HTTPStatusError("x", request=httpx.Request("POST", "https://x"), response=httpx.Response(401))]))
+    monkeypatch.setattr(ai_admin_service, "call_model", fake)
+    payload = YandexKeyRequest(api_key=NEW_KEY, folder_id="b1gabcdef")
+    with pytest.raises(AppError) as exc:
+        await ai_admin_service.replace_yandex_key(service.db, payload=payload, user_id=service.user, workspace_id=service.ws)
+    assert exc.value.code == "VALIDATION_ERROR" and "Ничего не изменено" in exc.value.message and "ключ не принят" in exc.value.message
+    assert NEW_KEY not in exc.value.message and service.db.conns == {} and service.db.stages == {} and service.events == []
+    assert seen[0].api_key == NEW_KEY  # проверялся именно новый ключ
+
+
+@pytest.mark.asyncio
+async def test_replace_key_creates_the_main_connection_and_moves_unconfigured_stages_to_it(service, monkeypatch):
+    fake, _ = _fake_call(iter(["ок"]))
+    monkeypatch.setattr(ai_admin_service, "call_model", fake)
+    monkeypatch.setattr(get_settings(), "llm_fallback_model", "deepseek-v4-flash")
+    result = await ai_admin_service.replace_yandex_key(
+        service.db, payload=YandexKeyRequest(api_key=NEW_KEY, folder_id="b1gabcdef"), user_id=service.user, workspace_id=service.ws
+    )
+    assert result.ok is True and "применён" in result.note
+    (conn,) = service.db.conns.values()
+    assert conn.name == ai_admin_service.MAIN_YANDEX_NAME and conn.kind == "yandex" and conn.folder_id == "b1gabcdef"
+    assert secrets_box.decrypt(conn.api_key_encrypted) == NEW_KEY and NEW_KEY not in str(vars(conn)) and conn.last_check_ok is True
+    by_stage = {r.stage: r for r in service.db.stages.values()}
+    assert set(by_stage) == {"relevance", "facts", "draft", "fallback"} and all(r.connection_id == conn.id for r in by_stage.values())
+    assert by_stage["draft"].model == "yandexgpt-5.1" and by_stage["fallback"].model == "deepseek-v4-flash"
+    assert NEW_KEY not in str(service.events) and NEW_KEY not in result.model_dump_json()
+    assert service.events[-1]["action"] == "ai_yandex_key_replaced"
+
+
+@pytest.mark.asyncio
+async def test_second_replacement_only_swaps_the_key_and_keeps_other_stage_settings(service, monkeypatch):
+    fake, _ = _fake_call(iter(["ок", "ок"]))
+    monkeypatch.setattr(ai_admin_service, "call_model", fake)
+    monkeypatch.setattr(get_settings(), "llm_fallback_model", "")
+    first = await ai_admin_service.replace_yandex_key(
+        service.db, payload=YandexKeyRequest(api_key=NEW_KEY, folder_id="b1gabcdef"), user_id=service.user, workspace_id=service.ws
+    )
+    assert first.ok
+    (conn,) = service.db.conns.values()
+    draft = next(r for r in service.db.stages.values() if r.stage == "draft")
+    draft.model = "yandexgpt-5-pro"  # админ вручную выбрал другую модель для черновика
+    stages_before = {r.stage: (r.connection_id, r.model) for r in service.db.stages.values()}
+
+    newer = "AQVN-even-newer-key-0987654321"
+    second = await ai_admin_service.replace_yandex_key(
+        service.db, payload=YandexKeyRequest(api_key=newer), user_id=service.user, workspace_id=service.ws  # каталог не вводим
+    )
+    assert second.ok and len(service.db.conns) == 1 and conn.folder_id == "b1gabcdef"
+    assert secrets_box.decrypt(conn.api_key_encrypted) == newer and conn.key_hint == "••••4321"
+    assert {r.stage: (r.connection_id, r.model) for r in service.db.stages.values()} == stages_before  # этапы не тронуты
+    assert "Этапы переведены" not in second.note
+
+
+@pytest.mark.asyncio
+async def test_replace_key_does_not_override_a_stage_that_has_its_own_connection(service, monkeypatch):
+    fake, _ = _fake_call(iter(["ок"]))
+    monkeypatch.setattr(ai_admin_service, "call_model", fake)
+    monkeypatch.setattr(get_settings(), "llm_fallback_model", "")
+    mine = await _create(service, name="Свой Яндекс", api_key="my-own-yandex-key-0001")
+    await ai_admin_service.set_stages(
+        service.db, payload=StagesUpdate(stages={"draft": StageIn(connection_id=mine.id, model="yandexgpt-5-pro")}), user_id=service.user, workspace_id=service.ws
+    )
+    await ai_admin_service.replace_yandex_key(
+        service.db, payload=YandexKeyRequest(api_key=NEW_KEY), user_id=service.user, workspace_id=service.ws
+    )
+    # единственное Яндекс-подключение уже есть — меняется его ключ; назначенный этап сохранил свою модель
+    assert len(service.db.conns) == 1 and secrets_box.decrypt(mine.api_key_encrypted) == NEW_KEY
+    draft = next(r for r in service.db.stages.values() if r.stage == "draft")
+    assert draft.connection_id == mine.id and draft.model == "yandexgpt-5-pro"
+    assert {r.stage for r in service.db.stages.values()} == {"draft", "relevance", "facts"}
+
+
+@pytest.mark.asyncio
+async def test_replace_key_needs_a_folder_and_a_valid_key_format(service, monkeypatch):
+    monkeypatch.setattr(get_settings(), "yandex_folder_id", "")
+    with pytest.raises(AppError) as exc:
+        await ai_admin_service.replace_yandex_key(
+            service.db, payload=YandexKeyRequest(api_key=NEW_KEY), user_id=service.user, workspace_id=service.ws
+        )
+    assert "каталога" in exc.value.message
+    for bad in ("короткий", "ключ с кириллицей и пробелами", ""):
+        with pytest.raises(ValidationError):
+            YandexKeyRequest(api_key=bad)
+    with pytest.raises(ValidationError):
+        YandexKeyRequest(api_key=NEW_KEY, folder_id="bad folder!")
+
+
+@pytest.mark.asyncio
+async def test_overview_offers_the_current_folder_for_the_replace_form(service, monkeypatch):
+    monkeypatch.setattr(get_settings(), "yandex_folder_id", "envfolder12345")
+    assert (await ai_admin_service.overview(service.db)).default_folder_id == "envfolder12345"
+    await _create(service, folder_id="b1gabcdef")
+    assert (await ai_admin_service.overview(service.db)).default_folder_id == "b1gabcdef"
 
 
 # ---------------- HTTP: доступ только администратору, ключи в схемах не отдаются ----------------

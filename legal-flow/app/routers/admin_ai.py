@@ -14,6 +14,7 @@ from app.schemas.admin_ai import (
     StagesUpdate,
     TestRequest,
     TestResultOut,
+    YandexKeyRequest,
 )
 from app.services import ai_admin_service
 from app.services.rate_limit import enforce_rate_limit
@@ -74,6 +75,18 @@ async def test_connection(
     return await ai_admin_service.test_connection(
         db, connection_id=connection_id, model=payload.model, user_id=user.id, workspace_id=membership.workspace_id
     )
+
+
+@router.post("/yandex-key", response_model=TestResultOut, dependencies=[Depends(require_csrf)])
+async def replace_yandex_key(
+    payload: YandexKeyRequest,
+    user: User = Depends(get_current_user),
+    membership: Membership = Depends(get_current_membership),
+    db: AsyncSession = Depends(get_db),
+):
+    """Заменить ключ YandexGPT одним действием: проверить новый ключ, сохранить и применить к этапам."""
+    await enforce_rate_limit("ai_test", str(user.id), 30, 3600)  # внутри — реальный платный запрос
+    return await ai_admin_service.replace_yandex_key(db, payload=payload, user_id=user.id, workspace_id=membership.workspace_id)
 
 
 @router.put("/stages", response_model=AiOverviewOut, dependencies=[Depends(require_csrf)])

@@ -26,6 +26,7 @@ from app.schemas.admin_ai import (
     StageOut,
     StagesUpdate,
     TestResultOut,
+    YandexKeyRequest,
 )
 from app.services.activity_service import log_activity
 
@@ -68,6 +69,7 @@ async def overview(db: AsyncSession) -> AiOverviewOut:
     return AiOverviewOut(
         connections=[connection_out(c) for c in connections], stages=stages, effective=effective,
         encryption_configured=secrets_box.is_configured(), model_suggestions=YANDEX_MODEL_SUGGESTIONS,
+        default_folder_id=next((c.folder_id for c in connections if c.kind == "yandex" and c.folder_id), "") or get_settings().yandex_folder_id,
     )
 
 
@@ -170,12 +172,8 @@ async def set_stages(db: AsyncSession, *, payload: StagesUpdate, user_id: uuid.U
     )
 
 
-async def test_connection(db: AsyncSession, *, connection_id: uuid.UUID, model: str, user_id: uuid.UUID, workspace_id: uuid.UUID) -> TestResultOut:
-    """Крошечный реальный запрос выбранной модели через подключение: проверяет ключ, адрес и имя модели."""
-    conn = await _get(db, connection_id)
-    key = secrets_box.decrypt(conn.api_key_encrypted)
-    base_url = await validate_base_url(conn.base_url) if conn.kind == "openai_compatible" else ""
-    target = build_target(kind=conn.kind, model=model, api_key=key, folder_id=conn.folder_id, base_url=base_url, source="admin", connection_name=conn.name)
+async def probe_target(target) -> tuple[bool, str, int]:
+    """Крошечный реальный запрос к модели: (работает ли, пояснение для человека, задержка в мс)."""
     started = time.monotonic()
     ok, note = False, ""
     try:
@@ -196,7 +194,71 @@ async def test_connection(db: AsyncSession, *, connection_id: uuid.UUID, model: 
         note = f"Сервис недоступен ({type(exc).__name__})."
     except (KeyError, IndexError, ValueError, TypeError):
         note = "Сервис ответил в неожиданном формате — проверьте адрес API (нужен OpenAI-совместимый /chat/completions)."
-    latency = int((time.monotonic() - started) * 1000)
+    return ok, note, int((time.monotonic() - started) * 1000)
+
+
+MAIN_YANDEX_NAME = "Яндекс Облако (основной)"
+
+
+def _env_main_model() -> str:
+    s = get_settings()
+    return s.yandex_model_uri.rsplit("/", 1)[-1] if s.llm_is_configured() else "yandexgpt-5.1"
+
+
+async def replace_yandex_key(
+    db: AsyncSession, *, payload: YandexKeyRequest, user_id: uuid.UUID, workspace_id: uuid.UUID
+) -> TestResultOut:
+    """Замена ключа YandexGPT одним действием. Сначала новый ключ проверяется реальным запросом — если не работает,
+    ничего не меняется. Затем ключ сохраняется (зашифрованным) в основном подключении Яндекса, а этапы без собственной
+    настройки (отбор, факты, черновик и — если задана — запасная модель) переводятся на него, так что старый ключ из
+    настроек сервера больше не нужен. Этапы, уже назначенные на другие подключения, не трогаются."""
+    settings = get_settings()
+    main = await db.scalar(select(AiConnection).where(AiConnection.kind == "yandex").order_by(AiConnection.created_at))
+    folder_id = payload.folder_id or (main.folder_id if main else "") or settings.yandex_folder_id
+    if not folder_id:
+        raise AppError("VALIDATION_ERROR", "Укажите идентификатор каталога Яндекс Облака.")
+    rows = {r.stage: r for r in (await db.scalars(select(AiStageModel))).all()}
+    probe_model = (rows["draft"].model if "draft" in rows and rows["draft"].model.startswith("yandexgpt") else None) or _env_main_model()
+    target = build_target(kind="yandex", model=probe_model, api_key=payload.api_key, folder_id=folder_id, source="admin", connection_name=MAIN_YANDEX_NAME)
+    ok, note, latency = await probe_target(target)
+    if not ok:
+        raise AppError("VALIDATION_ERROR", f"Новый ключ не прошёл проверку ({probe_model}): {note} Ничего не изменено, прежний ключ продолжает работать.")
+    encrypted = secrets_box.encrypt(payload.api_key)  # без SECRETS_ENCRYPTION_KEY — понятная ошибка, ничего не сохраняется
+    now = datetime.now(timezone.utc)
+    if main is None:
+        main = AiConnection(name=MAIN_YANDEX_NAME, kind="yandex", base_url="", folder_id=folder_id, api_key_encrypted=encrypted,
+                            key_hint=secrets_box.hint(payload.api_key), created_by=user_id)
+        db.add(main)
+        await db.flush()
+    else:
+        main.folder_id, main.api_key_encrypted, main.key_hint = folder_id, encrypted, secrets_box.hint(payload.api_key)
+    main.last_check_at, main.last_check_ok, main.last_check_note = now, True, f"{probe_model}: {note}"
+    wanted = {"relevance": _env_main_model(), "facts": _env_main_model(), "draft": _env_main_model()}
+    if (settings.llm_fallback_model or "").strip():
+        wanted["fallback"] = settings.llm_fallback_model.strip()
+    assigned = []
+    for stage, model in wanted.items():
+        if stage in rows:
+            continue  # у этапа уже есть своя настройка из админки — не перебиваем
+        db.add(AiStageModel(stage=stage, connection_id=main.id, model=model, updated_by=user_id))
+        assigned.append(stage)
+    await db.commit()
+    llm_targets.invalidate_cache()
+    await log_activity(
+        db, workspace_id=workspace_id, actor_user_id=user_id, action="ai_yandex_key_replaced",
+        details={"connection_id": str(main.id), "folder_id": folder_id, "assigned_stages": assigned, "model_checked": probe_model},
+    )
+    return TestResultOut(ok=True, latency_ms=latency, note=f"Новый ключ работает ({probe_model}) и применён." + (
+        f" Этапы переведены на него: {', '.join(_STAGE_TITLES[s] for s in assigned)}." if assigned else ""))
+
+
+async def test_connection(db: AsyncSession, *, connection_id: uuid.UUID, model: str, user_id: uuid.UUID, workspace_id: uuid.UUID) -> TestResultOut:
+    """Крошечный реальный запрос выбранной модели через подключение: проверяет ключ, адрес и имя модели."""
+    conn = await _get(db, connection_id)
+    key = secrets_box.decrypt(conn.api_key_encrypted)
+    base_url = await validate_base_url(conn.base_url) if conn.kind == "openai_compatible" else ""
+    target = build_target(kind=conn.kind, model=model, api_key=key, folder_id=conn.folder_id, base_url=base_url, source="admin", connection_name=conn.name)
+    ok, note, latency = await probe_target(target)
     conn.last_check_at, conn.last_check_ok, conn.last_check_note = datetime.now(timezone.utc), ok, f"{model}: {note}"
     await db.commit()
     await log_activity(

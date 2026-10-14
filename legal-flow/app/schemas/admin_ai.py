@@ -41,6 +41,29 @@ class ConnectionCreate(BaseModel):
         return v
 
 
+class YandexKeyRequest(BaseModel):
+    """«Заменить ключ YandexGPT» одним действием: проверка ключа, подключение и этапы без своей настройки."""
+
+    api_key: str
+    folder_id: str = ""  # пусто — берётся каталог текущего подключения или настроек сервера
+
+    @field_validator("api_key")
+    @classmethod
+    def _key(cls, v: str) -> str:
+        v = v.strip()
+        if not _KEY_RE.match(v):
+            raise ValueError("API-ключ: от 8 знаков, только латиница, цифры и знаки, без пробелов")
+        return v
+
+    @field_validator("folder_id")
+    @classmethod
+    def _folder(cls, v: str) -> str:
+        v = v.strip()
+        if v and not _FOLDER_RE.match(v):
+            raise ValueError("Идентификатор каталога: латиница, цифры, - и _ (5–64 знака)")
+        return v
+
+
 class ConnectionUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     api_key: str | None = None  # не передан — прежний ключ сохраняется
@@ -116,6 +139,7 @@ class AiOverviewOut(BaseModel):
     effective: list[EffectiveOut]
     encryption_configured: bool
     model_suggestions: list[str]
+    default_folder_id: str = ""  # каталог Яндекса для подстановки в форму замены ключа (не секрет)
 
 
 class TestRequest(BaseModel):

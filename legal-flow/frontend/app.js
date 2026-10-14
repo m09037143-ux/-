@@ -560,6 +560,13 @@
     if (!ai.encryption_configured) {
       html += '<p class="notice warning"><strong>Ключи пока нельзя сохранять.</strong> На сервере не задан ключ шифрования <code>SECRETS_ENCRYPTION_KEY</code>. Сгенерируйте его командой <code>python3 -c "import base64,os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"</code>, добавьте в переменные окружения сервера и перезапустите сервис. Пока работают настройки сервера.</p>';
     }
+    var mainConn = ai.connections.find(function (c) { return c.kind === 'yandex'; });
+    html += '<div class="card" style="margin-bottom:18px"><h3 style="margin-top:0">Ключ YandexGPT</h3>'
+      + (mainConn
+        ? '<p>Сейчас работает ключ из админки: <code>' + esc(mainConn.key_hint) + '</code> (подключение «' + esc(mainConn.name) + '», каталог ' + esc(mainConn.folder_id) + ').</p>'
+        : '<p>Сейчас работает ключ из настроек сервера. Чтобы его заменить (например, когда он истечёт), нажмите кнопку ниже.</p>')
+      + '<p class="small">Вставьте новый ключ — система сначала проверит его реальным запросом к модели. Если он не работает, ничего не изменится, прежний ключ продолжит работать. Если подошёл, он сохраняется зашифрованным и применяется ко всем этапам ниже, у которых нет своей настройки. Перезапуск не нужен.</p>'
+      + button('Заменить ключ', 'aiQuickKey', 'primary') + '</div>';
     html += '<h3>Подключения</h3><p class="small">Сервис, ключ и (для Яндекса) каталог. Ключ показывается один раз при вводе, дальше виден только его конец; в базе он хранится зашифрованным.</p>';
     html += ai.connections.length ? '<table class="table"><thead><tr><th>Название</th><th>Тип</th><th>Адрес / каталог</th><th>Ключ</th><th>Проверка</th><th></th></tr></thead><tbody>' + ai.connections.map(function (c) {
       var check = c.last_check_at ? '<span class="status ' + (c.last_check_ok ? 'ready' : 'danger') + '">' + (c.last_check_ok ? 'работает' : 'ошибка') + '</span><br><span class="small">' + esc(c.last_check_note) + '</span>' : '<span class="small">не проверялось</span>';
@@ -1013,6 +1020,22 @@
             if (cur) await api('/api/v1/admin/ai/connections/' + cur.id, { method: 'PATCH', body: body });
             else { body.kind = kind; await api('/api/v1/admin/ai/connections', { method: 'POST', body: body }); }
             state.aiAdmin = await api('/api/v1/admin/ai'); toast('Подключение сохранено'); render();
+          });
+        return;
+      }
+      if (a === 'aiQuickKey') {
+        if (!gate()) return;
+        modal('Заменить ключ YandexGPT',
+          field('ai-folder', 'Идентификатор каталога Яндекс Облака', 'text', (state.aiAdmin && state.aiAdmin.default_folder_id) || '')
+          + field('ai-key', 'Новый API-ключ', 'password', '')
+          + '<p class="small">Каталог подставлен из текущих настроек; меняйте его, только если новый ключ выдан в другом каталоге. Ключ шифруется и больше не показывается. Не присылайте ключи в чат и почту.</p>',
+          'Проверить и применить', async function (data) {
+            var d = data.ai;
+            if (!d.key) return toast('Вставьте новый API-ключ', true);
+            toast('Проверяем новый ключ…');
+            var res = await api('/api/v1/admin/ai/yandex-key', { method: 'POST', body: { api_key: d.key, folder_id: d.folder } });
+            state.aiAdmin = await api('/api/v1/admin/ai');
+            toast(res.note); render();
           });
         return;
       }
