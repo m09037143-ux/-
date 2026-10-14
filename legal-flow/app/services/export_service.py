@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 from xml.sax.saxutils import escape
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import AppError
@@ -44,12 +44,65 @@ def render_xml(items: list[tuple[NewsItem, OfficialDocument | None]]) -> str:
     )
 
 
-async def create_export(db: AsyncSession, *, workspace_id: uuid.UUID, filename: str) -> Export:
+DEFAULT_LATEST_COUNT = 10
+MAX_EXPORT_ITEMS = 500
+
+
+def _published_moment():
+    """Момент «подготовки» материала: дата публикации (а если её нет — дата создания)."""
+    return func.coalesce(NewsItem.published_at, NewsItem.created_at)
+
+
+async def list_candidates(db: AsyncSession, *, workspace_id: uuid.UUID, limit: int = 200) -> list[NewsItem]:
+    """Опубликованные материалы, новые сверху — из них пользователь выбирает, что выгрузить."""
+    stmt = (
+        select(NewsItem)
+        .where(NewsItem.workspace_id == workspace_id, NewsItem.status == NewsStatus.PUBLISHED)
+        .order_by(_published_moment().desc(), NewsItem.id.desc())
+        .limit(limit)
+    )
+    return list((await db.scalars(stmt)).all())
+
+
+async def _select_items(
+    db: AsyncSession, *, workspace_id: uuid.UUID, mode: str, limit: int, news_item_ids: list[uuid.UUID] | None
+) -> list[NewsItem]:
+    base = select(NewsItem).where(NewsItem.workspace_id == workspace_id, NewsItem.status == NewsStatus.PUBLISHED)
+    if news_item_ids:
+        wanted = list(dict.fromkeys(news_item_ids))  # без повторов, порядок не важен — ниже сортируем по дате
+        rows = list((await db.scalars(base.where(NewsItem.id.in_(wanted)))).all())
+        if len(rows) != len(wanted):
+            raise AppError(
+                "VALIDATION_ERROR",
+                "Часть выбранных материалов не найдена или ещё не опубликована — обновите страницу и выберите заново.",
+            )
+        rows.sort(key=lambda n: (n.published_at or n.created_at, str(n.id)), reverse=True)
+        return rows
+    if mode == "selected":
+        raise AppError("VALIDATION_ERROR", "Отметьте хотя бы один материал для экспорта.")
+    stmt = base.order_by(_published_moment().desc(), NewsItem.id.desc())
+    if mode == "latest":
+        stmt = stmt.limit(limit or DEFAULT_LATEST_COUNT)
+    else:  # all
+        stmt = stmt.limit(MAX_EXPORT_ITEMS)
+    return list((await db.scalars(stmt)).all())
+
+
+async def create_export(
+    db: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    filename: str,
+    mode: str = "latest",
+    limit: int = DEFAULT_LATEST_COUNT,
+    news_item_ids: list[uuid.UUID] | None = None,
+) -> Export:
+    """mode: latest — последние `limit` опубликованных (по умолчанию), selected — материалы из `news_item_ids`,
+    all — все опубликованные. Если переданы news_item_ids, выгружаются именно они."""
     if not filename.endswith(".xml"):
         filename += ".xml"
 
-    stmt = select(NewsItem).where(NewsItem.workspace_id == workspace_id, NewsItem.status == NewsStatus.PUBLISHED)
-    news_items = (await db.scalars(stmt)).all()
+    news_items = await _select_items(db, workspace_id=workspace_id, mode=mode, limit=limit, news_item_ids=news_item_ids)
     if not news_items:
         raise AppError("VALIDATION_ERROR", "Нет утверждённых и опубликованных материалов для экспорта.")
 

@@ -15,7 +15,22 @@ from app.security import (
     verify_password,
 )
 
+SITE_IN_DEVELOPMENT = "Сайт находится в разработке. Регистрация и вход для пользователей временно закрыты."
+
+
+def ensure_registration_open() -> None:
+    if get_settings().admin_only_mode:
+        raise AppError("FORBIDDEN", SITE_IN_DEVELOPMENT)
+
+
+def ensure_user_may_enter(user: User) -> None:
+    """В закрытом режиме работать на сайте может только администратор платформы."""
+    if get_settings().admin_only_mode and not user.is_platform_admin:
+        raise AppError("FORBIDDEN", SITE_IN_DEVELOPMENT)
+
+
 async def register(db: AsyncSession, *, name: str, email: str, password: str) -> tuple[User, Workspace, str]:
+    ensure_registration_open()
     email_norm = email.strip().lower()
     existing = await db.scalar(select(User).where(User.email == email_norm))
     if existing is not None:
@@ -54,6 +69,7 @@ async def login(db: AsyncSession, *, email: str, password: str) -> tuple[User, s
     user = await db.scalar(select(User).where(User.email == email_norm))
     if user is None or not verify_password(user.password_hash, password):
         raise AppError("UNAUTHORIZED", "Неверный email или пароль.")
+    ensure_user_may_enter(user)
     session_token = await _create_session(db, user_id=user.id)
     await db.commit()
     return user, session_token

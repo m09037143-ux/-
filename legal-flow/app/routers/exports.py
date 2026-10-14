@@ -2,7 +2,7 @@ import re
 import uuid
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,7 +11,7 @@ from app.deps import get_current_membership, require_active_access, require_csrf
 from app.errors import AppError
 from app.models import Export, Membership
 from app.models.enums import Role
-from app.schemas.exports import CreateExportRequest, ExportDownloadOut, ExportOut
+from app.schemas.exports import CreateExportRequest, ExportCandidateOut, ExportDownloadOut, ExportOut
 from app.services import export_service
 
 router = APIRouter(prefix="/api/v1", tags=["exports"])
@@ -42,8 +42,31 @@ async def create_export(
     _access: Membership = Depends(require_active_access),
     db: AsyncSession = Depends(get_db),
 ):
-    export = await export_service.create_export(db, workspace_id=membership.workspace_id, filename=payload.filename)
+    export = await export_service.create_export(
+        db,
+        workspace_id=membership.workspace_id,
+        filename=payload.filename,
+        mode=payload.mode,
+        limit=payload.limit,
+        news_item_ids=payload.news_item_ids,
+    )
     return _out(export)
+
+
+@router.get("/exports/candidates", response_model=list[ExportCandidateOut])
+async def export_candidates(
+    limit: int = Query(default=200, ge=1, le=500),
+    membership: Membership = Depends(get_current_membership),
+    db: AsyncSession = Depends(get_db),
+):
+    """Опубликованные материалы (новые сверху) — список для ручного выбора в разделе «Экспорт»."""
+    rows = await export_service.list_candidates(db, workspace_id=membership.workspace_id, limit=limit)
+    return [
+        ExportCandidateOut(
+            id=n.id, title=n.title, release_mode=n.release_mode.value, published_at=n.published_at, created_at=n.created_at
+        )
+        for n in rows
+    ]
 
 
 def attachment_headers(filename: str) -> dict:

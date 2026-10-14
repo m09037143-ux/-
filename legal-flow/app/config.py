@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     trial_hours: int = 72
     trial_plan_code: str = "start"
 
+    # Закрытый режим на время разработки: регистрация закрыта, войти и работать может только администратор
+    # платформы (users.is_platform_admin); остальные видят «Сайт находится в разработке». Включается переменной
+    # ADMIN_ONLY_MODE=true (на боевом сервере — в deploy/.env); API-ключи рабочих пространств не затрагиваются.
+    admin_only_mode: bool = False
+
     llm_provider: str = "yandexgpt_pro_5_1"
     yandex_folder_id: str = ""
     yandex_model_uri: str = ""

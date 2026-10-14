@@ -37,6 +37,9 @@ async def get_current_user(
     user = await db.get(User, session.user_id)
     if user is None:
         raise AppError("UNAUTHORIZED", "Пользователь не найден.")
+    if get_settings().admin_only_mode and not user.is_platform_admin:
+        # Закрытый режим: прежние сессии обычных пользователей перестают работать.
+        raise AppError("UNAUTHORIZED", "Сайт находится в разработке. Вход для пользователей временно закрыт.")
     return user
 
 

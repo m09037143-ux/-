@@ -28,6 +28,7 @@ def _client_ip(request: Request) -> str:
 
 @router.post("/register", response_model=MeResponse, status_code=201)
 async def register(payload: RegisterRequest, request: Request, response: Response, db: AsyncSession = Depends(get_db)):
+    auth_service.ensure_registration_open()
     settings = get_settings()
     await enforce_rate_limit("register", _client_ip(request), settings.rate_limit_register_per_hour, 3600)
     user, workspace, session_token = await auth_service.register(

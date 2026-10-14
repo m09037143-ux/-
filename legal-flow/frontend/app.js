@@ -100,6 +100,11 @@
     scanJobWatching: false,
     newsSignature: '',
     exportsList: [],
+    exportCandidates: [], // опубликованные материалы, новые сверху (для выбора в разделе «Экспорт»)
+    exportMode: 'latest', // latest — последние N, selected — выбранные вручную
+    exportLimit: 10,
+    exportSel: [],
+    exportName: '',
     apiKeys: [],
     publishedCount: 0,
     activityList: [],
@@ -470,6 +475,16 @@
     return page('Расписание', '<div class="grid2"><div class="card"><h3>План запуска</h3><p>' + esc(state.flow.schedule_period) + ', ' + esc(state.flow.schedule_time) + ' · Москва UTC+3</p><p>До ' + state.flow.news_limit_per_run + ' новостей за запуск</p>' + button('Изменить', 'changeSchedule') + '</div><div class="card"><h3>Ручной запуск</h3><p>Тема: ' + esc(state.flow.theme) + '</p>' + button('▶ Приступить к сбору', 'collect', 'primary') + '</div></div>', 'Расписание в MVP запускается только вручную кнопкой — планировщик по времени не подключён (см. ROADMAP).');
   }
 
+  // Тело запроса экспорта по выбору пользователя; null — выбор неполный (подсказка уже показана).
+  function exportBody(filename) {
+    if (state.exportMode === 'selected') {
+      if (!state.exportSel.length) { toast('Отметьте хотя бы один материал для экспорта', true); return null; }
+      return { filename: filename, mode: 'selected', news_item_ids: state.exportSel.slice() };
+    }
+    var n = Math.min(Math.max(Number(state.exportLimit) || 10, 1), 200);
+    return { filename: filename, mode: 'latest', limit: n };
+  }
+
   function exportsPage() {
     var published = state.user ? (state.publishedCount || 0) : currentNewsSource().filter(function (x) { return x.status === 'PUBLISHED'; }).length;
     var disabled = published ? '' : 'disabled title="Сначала опубликуйте материал"';
@@ -482,8 +497,30 @@
     ].map(function (c) {
       return '<div class="row" style="justify-content:space-between;gap:12px"><div><strong>' + c[0] + '</strong><p class="small" style="margin:3px 0 0">' + c[3] + '</p></div><span class="status ' + c[2] + '">' + c[1] + '</span></div>';
     }).join('');
+    var cand = state.exportCandidates || [];
+    var sel = state.exportSel || [];
+    var nLatest = Math.min(Math.max(Number(state.exportLimit) || 10, 1), Math.max(cand.length, 1));
+    function candRow(c, withBox) {
+      var when = c.published_at || c.created_at;
+      return '<label class="row" style="gap:8px;align-items:flex-start;padding:5px 0;cursor:' + (withBox ? 'pointer' : 'default') + '">'
+        + (withBox ? '<input type="checkbox" data-export-pick="' + esc(c.id) + '"' + (sel.indexOf(c.id) >= 0 ? ' checked' : '') + ' style="margin-top:4px">' : '<span style="width:16px">•</span>')
+        + '<span style="flex:1">' + esc(c.title) + '<br><span class="small">' + (when ? new Date(when).toLocaleString('ru-RU') : '') + '</span></span></label>';
+    }
+    var modeHtml = '<div style="display:grid;gap:8px;margin:12px 0"><strong>Что выгрузить</strong>'
+      + '<label class="row" style="gap:8px;flex-wrap:wrap"><input type="radio" name="export-mode" value="latest"' + (state.exportMode === 'latest' ? ' checked' : '') + '> Последние <input type="number" id="export-limit" min="1" max="200" value="' + esc(state.exportLimit) + '" style="width:72px"> опубликованных (по умолчанию)</label>'
+      + '<label class="row" style="gap:8px"><input type="radio" name="export-mode" value="selected"' + (state.exportMode === 'selected' ? ' checked' : '') + '> Выбрать материалы вручную</label></div>';
+    var listHtml;
+    if (!cand.length) listHtml = '<p class="small">Опубликованных материалов пока нет.</p>';
+    else if (state.exportMode === 'selected') {
+      listHtml = '<div class="row" style="gap:8px;margin-bottom:6px;flex-wrap:wrap">' + button('Выбрать все', 'exportPickAll', 'secondary') + button('Снять выбор', 'exportPickNone', 'secondary') + '<span class="small" id="export-count">Выбрано: ' + sel.length + ' из ' + cand.length + '</span></div>'
+        + '<div id="export-list" style="max-height:280px;overflow:auto;border:1px solid var(--line,#ddd);border-radius:8px;padding:6px 10px">' + cand.map(function (c) { return candRow(c, true); }).join('') + '</div>';
+    } else {
+      listHtml = '<p class="small" style="margin:0 0 4px">В файл попадут ' + nLatest + ' самых новых (список сверху вниз — от новых к старым):</p>'
+        + '<div style="max-height:200px;overflow:auto;border:1px solid var(--line,#ddd);border-radius:8px;padding:6px 10px">' + cand.slice(0, nLatest).map(function (c) { return candRow(c, false); }).join('') + '</div>';
+    }
     var xmlCard = '<div class="card"><h3>XML для сайта</h3><p>Опубликованных материалов: ' + published + '</p><p class="small">В XML включены только текст и официальный документ; сайт обнаружения не входит. Доступно на любом тарифе.</p>'
-      + field('xml-name', 'Название файла', 'text', 'legal-news.xml')
+      + modeHtml + listHtml
+      + field('xml-name', 'Название файла', 'text', state.exportName || 'legal-news.xml')
       + '<div class="row" style="gap:10px;flex-wrap:wrap">' + button('Скачать XML-файл', 'exportDownload', 'primary', disabled) + button('Предпросмотр XML', 'exportXml', 'secondary', disabled) + '</div></div>';
     var keysHtml = state.apiKeys.length ? '<table class="table"><thead><tr><th>Название</th><th>Ключ</th><th>Создан</th><th>Последнее использование</th><th></th></tr></thead><tbody>' + state.apiKeys.map(function (k) {
       return '<tr><td>' + esc(k.name) + '</td><td><code>' + esc(k.key_prefix) + '…</code></td><td>' + new Date(k.created_at).toLocaleDateString('ru-RU') + '</td><td>' + (k.last_used_at ? new Date(k.last_used_at).toLocaleString('ru-RU') : '—') + '</td><td>' + (k.revoked_at ? '<span class="status draft">Отозван</span>' : button('Отозвать', 'revokeKey', '', 'data-id="' + k.id + '"')) + '</td></tr>';
@@ -673,6 +710,9 @@
       if (route === '/app/exports') {
         state.exportsList = await api('/api/v1/exports');
         state.publishedCount = (await api('/api/v1/news?status=PUBLISHED')).length;
+        state.exportCandidates = await api('/api/v1/exports/candidates');
+        var knownIds = state.exportCandidates.map(function (c) { return c.id; });
+        state.exportSel = state.exportSel.filter(function (id) { return knownIds.indexOf(id) >= 0; });
         try { state.apiKeys = await api('/api/v1/api-keys'); } catch (e) { state.apiKeys = []; }
       }
       if (route === '/app/activity') state.activityList = await api('/api/v1/activity');
@@ -1010,10 +1050,17 @@
         toast('Модели по этапам сохранены'); render();
         return;
       }
+      if (a === 'exportPickAll' || a === 'exportPickNone') {
+        state.exportSel = a === 'exportPickAll' ? state.exportCandidates.map(function (c) { return c.id; }) : [];
+        render();
+        return;
+      }
       if (a === 'exportDownload') {
         if (!gate()) return;
         var dlName = value('xml-name') || 'legal-news.xml';
-        var made = await api('/api/v1/exports', { method: 'POST', body: { filename: dlName } });
+        var dlBody = exportBody(dlName);
+        if (!dlBody) return;
+        var made = await api('/api/v1/exports', { method: 'POST', body: dlBody });
         state.exportsList = await api('/api/v1/exports');
         window.location.href = '/api/v1/exports/' + made.id + '/file';
         toast('Файл скачивается: ' + made.filename); render();
@@ -1045,7 +1092,9 @@
       if (a === 'exportXml') {
         if (!gate()) return;
         var filename = value('xml-name') || 'legal-news.xml';
-        var exp = await api('/api/v1/exports', { method: 'POST', body: { filename: filename } });
+        var xmlBody = exportBody(filename);
+        if (!xmlBody) return;
+        var exp = await api('/api/v1/exports', { method: 'POST', body: xmlBody });
         var dl = await api('/api/v1/exports/' + exp.id + '/download');
         modal('Предпросмотр XML', '<p class="small">Это предпросмотр. Сохранить файл на компьютер — кнопка «Скачать XML-файл».</p><pre class="xml">' + esc(dl.content) + '</pre>', 'Закрыть', function () {});
         state.exportsList = await api('/api/v1/exports'); render();
@@ -1073,6 +1122,7 @@
   document.addEventListener('input', function (e) {
     if (e.target.id === 'search') { state.newsQuery = e.target.value; loadNews().then(function () { document.getElementById('news-results').innerHTML = newsRowsHtml(); }); }
     if (e.target.id === 'edit-text') { var c = document.getElementById('counter'); if (c) c.textContent = 'Символов: ' + e.target.value.length; }
+    if (e.target.id === 'xml-name') state.exportName = e.target.value;
   });
   document.addEventListener('change', function (e) {
     if (e.target.id === 'source-filter') { state.newsSourceFilter = e.target.value; loadNews().then(function () { document.getElementById('news-results').innerHTML = newsRowsHtml(); }); }
@@ -1088,6 +1138,18 @@
         .catch(function (err) { toast(err.message, true); e.target.checked = !checked; });
     }
     if (e.target.name === 'limit') state.setupLimit = Number(e.target.value);
+    if (e.target.name === 'export-mode') { state.exportMode = e.target.value; render(); }
+    if (e.target.id === 'export-limit') {
+      var lim = Math.min(Math.max(parseInt(e.target.value, 10) || 10, 1), 200);
+      state.exportLimit = lim; render();
+    }
+    if (e.target.hasAttribute('data-export-pick')) {
+      var pid = e.target.dataset.exportPick, at = state.exportSel.indexOf(pid);
+      if (e.target.checked && at < 0) state.exportSel.push(pid);
+      if (!e.target.checked && at >= 0) state.exportSel.splice(at, 1);
+      var cnt = document.getElementById('export-count');
+      if (cnt) cnt.textContent = 'Выбрано: ' + state.exportSel.length + ' из ' + state.exportCandidates.length;
+    }
   });
 
   document.addEventListener('change', function (e) {

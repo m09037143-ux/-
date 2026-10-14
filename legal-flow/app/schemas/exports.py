@@ -1,11 +1,25 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 
 class CreateExportRequest(BaseModel):
     filename: str = Field(default="legal-news.xml", max_length=255)
+    # latest — последние `limit` опубликованных (по умолчанию); selected — выбранные вручную; all — все опубликованные.
+    # Если переданы news_item_ids, выгружаются именно они.
+    mode: Literal["latest", "selected", "all"] = "latest"
+    limit: int = Field(default=10, ge=1, le=200)
+    news_item_ids: list[uuid.UUID] | None = Field(default=None, max_length=500)
+
+
+class ExportCandidateOut(BaseModel):
+    id: uuid.UUID
+    title: str
+    release_mode: str
+    published_at: datetime | None = None
+    created_at: datetime
 
 
 class ExportOut(BaseModel):
