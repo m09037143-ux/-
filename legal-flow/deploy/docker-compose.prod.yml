@@ -91,6 +91,14 @@ services:
       timeout: 5s
       retries: 10
 
+# Сеть контейнеров с MTU меньше, чем у сетевой карты VPS (1450 у Рег.облака): иначе крупные пакеты из контейнеров
+# теряются, и HTTPS к части внешних сайтов (источники новостей, Яндекс, Render) зависает по таймауту.
+networks:
+  default:
+    driver: bridge
+    driver_opts:
+      com.docker.network.driver.mtu: "1400"
+
 volumes:
   pp_db_data:
   caddy_data:
