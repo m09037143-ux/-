@@ -585,7 +585,10 @@
       listHtml = '<div class="row" style="gap:8px;margin-bottom:6px;flex-wrap:wrap">' + button('Выбрать все', 'exportPickAll', 'secondary') + button('Снять выбор', 'exportPickNone', 'secondary') + '<span class="small" id="export-count">Выбрано: ' + sel.length + ' из ' + cand.length + '</span></div>'
         + '<div id="export-list" style="max-height:280px;overflow:auto;border:1px solid var(--line,#ddd);border-radius:8px;padding:6px 10px">' + cand.map(function (c) { return candRow(c, true); }).join('') + '</div>';
     } else {
-      listHtml = '<p class="small" style="margin:0 0 4px">В файл попадут ' + nLatest + ' самых новых (список сверху вниз — от новых к старым):</p>'
+      var fewHint = cand.length < (Number(state.exportLimit) || 10)
+        ? '<p class="small" style="margin:0 0 6px"><strong>Опубликовано только ' + cand.length + ' из ' + (Number(state.exportLimit) || 10) + ' запрошенных.</strong> В экспорт попадают лишь опубликованные материалы: откройте остальные в «Новостях», проверьте, утвердите и опубликуйте — тогда они появятся здесь.</p>'
+        : '';
+      listHtml = fewHint + '<p class="small" style="margin:0 0 4px">В файл попадут ' + nLatest + ' самых новых (список сверху вниз — от новых к старым):</p>'
         + '<div style="max-height:200px;overflow:auto;border:1px solid var(--line,#ddd);border-radius:8px;padding:6px 10px">' + cand.slice(0, nLatest).map(function (c) { return candRow(c, false); }).join('') + '</div>';
     }
     var xmlCard = '<div class="card"><h3>XML для сайта</h3><p>Опубликованных материалов: ' + published + '</p><p class="small">В XML включены только текст и официальный документ; сайт обнаружения не входит. Доступно на любом тарифе.</p>'
