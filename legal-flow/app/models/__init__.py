@@ -10,6 +10,7 @@ from app.models.editorial import (
     EditorReview,
 )
 from app.models.ops import LlmCall, Export, ActivityEvent, ApiKey, AiConnection, AiStageModel
+from app.models.marketing import EarlyAccessRequest, ProductEvent
 
 __all__ = [
     "User",
@@ -39,4 +40,6 @@ __all__ = [
     "ApiKey",
     "AiConnection",
     "AiStageModel",
+    "EarlyAccessRequest",
+    "ProductEvent",
 ]

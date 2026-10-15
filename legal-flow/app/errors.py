@@ -50,6 +50,9 @@ _FIELD_LABELS = {
     "name": "Имя",
     "email": "Email",
     "password": "Пароль",
+    "consent": "Согласие",
+    "api_key": "API-ключ",
+    "folder_id": "Каталог",
 }
 
 _TYPE_MESSAGES = {
@@ -70,6 +73,9 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
     ctx = first.get("ctx") or {}
     if "valid email address" in first.get("msg", ""):
         detail = "некорректный email"
+    elif error_type == "value_error":
+        # собственные проверки полей (field_validator) пишут понятное сообщение — показываем его, а не «некорректное значение»
+        detail = first.get("msg", "").removeprefix("Value error, ").strip() or _TYPE_MESSAGES["value_error"]
     elif error_type in _TYPE_MESSAGES:
         try:
             detail = _TYPE_MESSAGES[error_type].format(**ctx)
@@ -78,7 +84,13 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
     else:
         detail = first.get("msg", "некорректное значение")
     message = f"{label}: {detail}"
+    # В ctx проверок field_validator лежит сам объект исключения (ValueError) — в JSON он не превращается,
+    # поэтому отдаём только безопасные поля.
+    safe_errors = [
+        {"loc": [str(p) for p in e.get("loc", [])], "msg": str(e.get("msg", "")), "type": str(e.get("type", ""))}
+        for e in exc.errors()
+    ]
     return JSONResponse(
         status_code=422,
-        content={"error": {"code": "VALIDATION_ERROR", "message": message, "details": {"errors": exc.errors()}}},
+        content={"error": {"code": "VALIDATION_ERROR", "message": message, "details": {"errors": safe_errors}}},
     )

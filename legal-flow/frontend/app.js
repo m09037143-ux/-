@@ -127,8 +127,40 @@
     setupLimit: 3,
     guestNews: guestExamples(),
     guestBrowsing: false,
+    registrationOpen: false, // GET /api/v1/public/config; пока закрыто — вместо регистрации заявка на ранний доступ
+    leadMessage: '',         // ответ сервера после отправки заявки
+    leadDraft: null,         // введённое в форму заявки — не теряется при ошибке
+    leadSending: false,
+    leadsAdmin: null,        // GET /api/v1/admin/leads (заявки и воронка лендинга)
     booting: true
   };
+
+  // ---------- Метрики лендинга: анонимный идентификатор браузера, без персональных данных ----------
+  function visitorId() {
+    try {
+      var id = localStorage.getItem('pp_vid');
+      if (!id) {
+        id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now().toString(36) + Math.random().toString(36).slice(2, 12));
+        localStorage.setItem('pp_vid', id);
+      }
+      return id;
+    } catch (e) { return ''; }
+  }
+  // once — не чаще раза за сессию вкладки (просмотр лендинга, открытие формы); сбой метрик пользователю не мешает
+  function track(name, once) {
+    try {
+      var vid = visitorId();
+      if (!vid) return;
+      if (once) {
+        if (sessionStorage.getItem('pp_ev_' + name)) return;
+        sessionStorage.setItem('pp_ev_' + name, '1');
+      }
+      fetch(API_BASE + '/api/v1/public/events', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true,
+        body: JSON.stringify({ visitor_id: vid, name: name })
+      }).catch(function () {});
+    } catch (e) { /* метрики не должны ломать страницу */ }
+  }
 
   var root = document.getElementById('root'), modalRoot = document.getElementById('modal-root');
   var focusBefore = null, confirmFn = null;
@@ -221,6 +253,8 @@
     state.route = route;
     if (!opts.keepEditing) state.editingDraft = false;
     if (route === '/app/admin') state.adminForbidden = null; // не показывать результат прошлой проверки, пока не пришёл новый ответ
+    if (route === '/') track('landing_view', true);
+    if (route === '/early-access') { track('lead_form_open', true); state.leadMessage = ''; }
     render();
     window.scrollTo(0, 0);
     loadForRoute(route).catch(function (e) {
@@ -236,7 +270,7 @@
 
   function banner() {
     if (!state.user) {
-      return '<div class="banner"><div><strong>Пример кабинета без регистрации</strong><p>Материалы демонстрационные. Для реальной работы зарегистрируйтесь и включите трёхдневное демо.</p></div>' + button('Зарегистрироваться', 'register', 'primary') + '</div>';
+      return '<div class="banner"><div><strong>Пример кабинета без регистрации</strong><p>Материалы демонстрационные. ' + (state.registrationOpen ? 'Для реальной работы зарегистрируйтесь и включите трёхдневное демо.' : 'Для реальной работы оставьте заявку на ранний доступ.') + '</p></div>' + (state.registrationOpen ? button('Зарегистрироваться', 'register', 'primary') : button('Запросить доступ', 'earlyAccess', 'primary')) + '</div>';
     }
     var a = state.access;
     if (!a) return '';
@@ -262,7 +296,7 @@
       var flowName = state.flow ? state.flow.name : (state.user ? 'Поток не настроен' : 'Пример');
       return '<div class="app"><aside class="sidebar">' + brand() + '<div class="switcher"><span class="small">ТЕКУЩИЙ ПОТОК</span><br><strong>' + esc(flowName) + '</strong></div><nav class="side-nav" aria-label="Кабинет">' + links.map(function (x) { return '<button data-route="' + x[0] + '" class="' + (state.route === x[0] ? 'active' : '') + '">' + x[1] + '</button>'; }).join('') + '</nav><div class="sidebottom"><p class="small">' + (!state.user ? 'Пример кабинета' : (state.access && !state.access.can_mutate ? 'Демо завершено' : 'Тариф: ' + (state.access ? state.access.plan_name : '—'))) + '</p>' + button('Тарифы', 'pricing') + ' ' + button('Выйти', 'logout') + '</div></aside><div style="min-width:0"><header class="topbar row"><strong>Правовой Поток</strong><span class="small">' + esc(state.user ? state.user.name : 'Гость') + '</span></header><main class="content">' + banner() + view + '</main></div></div>';
     }
-    return '<div class="public"><header class="pubhead"><div class="wrap row">' + brand() + '<nav class="pubnav" aria-label="Навигация"><button data-route="/features">Возможности</button><button data-route="/pricing">Тарифы</button><button data-route="/faq">FAQ</button><button data-route="/contacts">Контакты</button></nav><div class="row">' + (state.user ? button('В кабинет', 'app', 'primary') : button('Войти', 'login') + button('Зарегистрироваться', 'register', 'primary')) + '</div></div></header><main>' + view + '</main><footer class="pubfoot"><div class="wrap row">' + brand() + '<div class="row">' + button('Тарифы', 'pricing') + button('FAQ', 'faq') + button('Политика', 'privacy') + '</div><small class="small">© 2026 Правовой Поток</small></div></footer></div>';
+    return '<div class="public"><header class="pubhead"><div class="wrap row">' + brand() + '<nav class="pubnav" aria-label="Навигация"><button data-route="/features">Возможности</button><button data-route="/pricing">Тарифы</button><button data-route="/faq">FAQ</button><button data-route="/contacts">Контакты</button></nav><div class="row">' + (state.user ? button('В кабинет', 'app', 'primary') : button('Войти', 'login') + (state.registrationOpen ? button('Зарегистрироваться', 'register', 'primary') : button('Запросить доступ', 'earlyAccess', 'primary'))) + '</div></div></header><main>' + view + '</main><footer class="pubfoot"><div class="wrap row">' + brand() + '<div class="row">' + button('Тарифы', 'pricing') + button('FAQ', 'faq') + button('Политика', 'privacy') + '</div><small class="small">© 2026 Правовой Поток</small></div></footer></div>';
   }
 
   function page(h, body, sub, action) {
@@ -272,17 +306,45 @@
   // ---------------------------------------------------------------------
   // Публичные страницы
   // ---------------------------------------------------------------------
+  // Главная кнопка лендинга: пока регистрация закрыта — заявка на ранний доступ (она же проверка спроса)
+  function ctaButton() {
+    return state.registrationOpen ? button('Зарегистрироваться и попробовать 3 дня', 'register', 'primary') : button('Запросить ранний доступ', 'earlyAccess', 'primary');
+  }
   function landing() {
-    return '<div class="wrap hero"><div><span class="tag">✦ Редакционный сервис юридических новостей</span><h1 style="margin-top:18px">Из правовой новости — <em>в самостоятельный материал для клиентов.</em></h1><p class="muted">Найдите значимую тему, сверьте официальный документ и подготовьте публикацию под контролем юриста.</p><div class="hero-actions">' + button('Зарегистрироваться и попробовать 3 дня', 'register', 'primary') + button('Посмотреть пример без регистрации', 'demo') + '</div><p class="small">72 часа знакомства · без банковской карты.</p></div><div class="mock"><div class="row"><strong>Редакторская карточка</strong><span class="tag">Пример</span></div><div class="mock-row"><strong>Источник обнаружения</strong><p class="small">Остаётся внутри редакции</p></div><div class="mock-row"><strong>Официальный документ</strong><p class="small">Ссылка для проверки и публикации</p></div><div class="mock-row"><strong>Текст для читателя</strong><p class="small">Утверждает юрист, не алгоритм</p></div></div></div><section class="section alt"><div class="wrap"><span class="tag">Ценность</span><h2 style="margin-top:16px">От события до проверенного черновика</h2><div class="grid3"><div class="card"><span class="tag">01 · Новости</span><h3>Общая очередь тем</h3><p>Материалы из выбранных сайтов собраны в одном месте.</p></div><div class="card"><span class="tag">02 · Источники</span><h3>Сверка с документом</h3><p>Новостной сайт отделён от официального первоисточника.</p></div><div class="card"><span class="tag">03 · Редактура</span><h3>Решение за юристом</h3><p>Текст редактируется и утверждается только после проверки.</p></div></div></div></section></div>';
+    var hero = '<div class="wrap hero"><div><span class="tag">✦ Для юристов и редакций юридических изданий</span><h1 style="margin-top:18px">Из правовой новости — <em>в самостоятельный материал для клиентов.</em></h1><p class="muted">Сервис сам следит за выбранными правовыми сайтами, находит значимые темы и готовит черновик по официальному документу. Решение о публикации остаётся за юристом.</p><div class="hero-actions">' + ctaButton() + button('Посмотреть пример без регистрации', 'demo') + '</div><p class="small">' + (state.registrationOpen ? '72 часа знакомства · без банковской карты.' : 'Идёт закрытое тестирование: оставьте заявку — мы откроем вам доступ.') + '</p></div><div class="mock"><div class="row"><strong>Редакторская карточка</strong><span class="tag">Пример</span></div><div class="mock-row"><strong>Источник обнаружения</strong><p class="small">Остаётся внутри редакции</p></div><div class="mock-row"><strong>Официальный документ</strong><p class="small">Ссылка для проверки и публикации</p></div><div class="mock-row"><strong>Текст для читателя</strong><p class="small">Утверждает юрист, не алгоритм</p></div></div></div>';
+    var problem = '<section class="section"><div class="wrap"><span class="tag">Проблема</span><h2 style="margin-top:16px">Правовые новости отнимают часы, а ошибка стоит доверия клиентов</h2><div class="grid3"><div class="card"><h3>Поток не успеть разобрать</h3><p>Юристы и редакции вручную просматривают Гарант, Право.ру, КонсультантПлюс и другие сайты, чтобы не пропустить важное.</p></div><div class="card"><h3>Копировать нельзя</h3><p>Чужой текст в клиентской рассылке или на сайте — репутационный и правовой риск. Нужен самостоятельный материал со ссылкой на официальный документ.</p></div><div class="card"><h3>Ошибка дорого стоит</h3><p>Неверный реквизит или факт подрывает доверие. Поэтому алгоритм не может публиковать сам — нужна проверка юристом.</p></div></div></div></section>';
+    var audience = '<section class="section alt"><div class="wrap"><span class="tag">Для кого</span><h2 style="margin-top:16px">Тем, кто регулярно публикует правовой контент</h2><div class="grid3"><div class="card"><h3>Юридические фирмы и практикующие юристы</h3><p>Новости для клиентов, блога и рассылок — без ежедневной ручной рутины.</p></div><div class="card"><h3>Редакции юридических изданий и порталов</h3><p>Единая очередь тем, контроль редактора и выгрузка готовых материалов в XML или по API.</p></div><div class="card"><h3>Юристы-блогеры и маркетологи юркомпаний</h3><p>Свежие поводы для публикаций с проверенными реквизитами и без дословного копирования.</p></div></div></div></section>';
+    var how = '<section class="section"><div class="wrap"><span class="tag">Как это работает</span><h2 style="margin-top:16px">От события до проверенного материала в четыре шага</h2><div class="grid3"><div class="card"><span class="tag">01 · Тема</span><h3>Выберите сайты и тему</h3><p>Добавьте источники, ключевые слова и стоп-слова. Сервис учитывает robots.txt и собирает материалы по расписанию.</p></div><div class="card"><span class="tag">02 · Черновик</span><h3>Получите черновик</h3><p>ИИ готовит самостоятельный текст и паспорт фактов. Счётчик показывает, насколько текст совпадает с оригиналом.</p></div><div class="card"><span class="tag">03 · Проверка</span><h3>Проверьте и утвердите</h3><p>Юрист сверяет официальный документ, правит текст и утверждает публикацию.</p></div></div><p style="margin-top:18px" class="muted">Затем материалы выгружаются в XML-файл или забираются по API — последние или те, что вы отметили.</p></div></section>';
+    var value = '<section class="section alt"><div class="wrap"><span class="tag">Ценность</span><h2 style="margin-top:16px">Экономия времени без потери контроля</h2><div class="grid3"><div class="card"><span class="tag">01 · Новости</span><h3>Общая очередь тем</h3><p>Материалы из выбранных сайтов собраны в одном месте и обновляются сами.</p></div><div class="card"><span class="tag">02 · Источники</span><h3>Сверка с документом</h3><p>Новостной сайт отделён от официального первоисточника, который попадает в публикацию.</p></div><div class="card"><span class="tag">03 · Редактура</span><h3>Решение за юристом</h3><p>Текст публикуется только после проверки и утверждения человеком.</p></div></div></div></section>';
+    var finalCta = '<section class="section"><div class="wrap" style="text-align:center"><h2>' + (state.registrationOpen ? 'Попробуйте на своих темах' : 'Хотите попробовать первыми?') + '</h2><p class="muted">' + (state.registrationOpen ? 'Трёхдневный доступ без банковской карты.' : 'Оставьте заявку на ранний доступ — это займёт минуту.') + '</p><div class="hero-actions" style="justify-content:center">' + ctaButton() + '</div></div></section>';
+    return hero + problem + audience + how + value + finalCta;
+  }
+  // Страница заявки на ранний доступ: проверка гипотезы «этот сервис нужен юристам и редакциям»
+  function earlyAccessPage() {
+    if (state.leadMessage) {
+      return '<div class="wrap section" style="max-width:640px"><div class="card"><h1>Заявка принята</h1><p>' + esc(state.leadMessage) + '</p><p>' + button('На главную', 'home', 'primary') + ' ' + button('Посмотреть пример', 'demo') + '</p></div></div>';
+    }
+    var d = state.leadDraft || {}; // введённое сохраняется при отправке и после ошибки
+    var roles = ['Юрист / юридическая фирма', 'Редакция / юридическое издание', 'Юрист-блогер / автор', 'Маркетинг юридической компании', 'Другое'];
+    return '<div class="wrap section" style="max-width:640px"><h1>Ранний доступ</h1><p class="muted">Сервис в закрытом тестировании. Оставьте заявку — мы напишем, когда сможем подключить вас.</p>'
+      + '<form id="lead-form" class="card" novalidate>'
+      + field('lead-name', 'Имя', 'text', d.name)
+      + field('lead-email', 'Рабочий email', 'email', d.email)
+      + field('lead-org', 'Организация (необязательно)', 'text', d.organization)
+      + '<div class="field"><label for="lead-role">Чем вы занимаетесь</label><select id="lead-role"><option value="">— выберите —</option>' + roles.map(function (r) { return '<option' + (d.role === r ? ' selected' : '') + '>' + esc(r) + '</option>'; }).join('') + '</select></div>'
+      + '<div class="field"><label for="lead-comment">Что для вас самое важное (необязательно)</label><textarea id="lead-comment" rows="3" maxlength="1000">' + esc(d.comment || '') + '</textarea></div>'
+      + '<div style="position:absolute;left:-9999px" aria-hidden="true"><label for="lead-website">Сайт</label><input id="lead-website" tabindex="-1" autocomplete="off"></div>'
+      + '<label><input type="checkbox" id="lead-consent"' + (d.consent ? ' checked' : '') + '> Согласен на обработку указанных данных для связи по ранней версии сервиса (<button type="button" class="link" data-route="/privacy">подробнее</button>)</label><span class="error" id="err-lead-consent"></span>'
+      + '<p><button class="btn primary" id="lead-submit" style="width:100%;margin-top:14px"' + (state.leadSending ? ' disabled' : '') + '>' + (state.leadSending ? 'Отправляем…' : 'Отправить заявку') + '</button></p></form></div>';
   }
   function features() {
-    return '<div class="wrap section"><h1>Возможности</h1><p class="muted">Обнаружение темы → официальный документ → паспорт фактов → новый текст → редакторское утверждение → XML.</p><div class="grid3"><div class="card"><h3>Источник обнаружения</h3><p>Остаётся во внутренней карточке для редактора.</p></div><div class="card"><h3>Проверка</h3><p>Сверка реквизитов и юридически значимых фактов с официальным документом.</p></div><div class="card"><h3>Вывод</h3><p>Самостоятельный текст для читателя и проверенные реквизиты.</p></div></div><p style="margin-top:24px">' + button('Зарегистрироваться', 'register', 'primary') + '</p></div>';
+    return '<div class="wrap section"><h1>Возможности</h1><p class="muted">Обнаружение темы → официальный документ → паспорт фактов → новый текст → редакторское утверждение → XML.</p><div class="grid3"><div class="card"><h3>Источник обнаружения</h3><p>Остаётся во внутренней карточке для редактора.</p></div><div class="card"><h3>Проверка</h3><p>Сверка реквизитов и юридически значимых фактов с официальным документом.</p></div><div class="card"><h3>Вывод</h3><p>Самостоятельный текст для читателя и проверенные реквизиты.</p></div></div><p style="margin-top:24px">' + (state.registrationOpen ? button('Зарегистрироваться', 'register', 'primary') : button('Запросить ранний доступ', 'earlyAccess', 'primary')) + '</p></div>';
   }
   function pricing() {
     var plans = state.plansList || [];
     return '<div class="wrap section"><h1>Тарифы</h1><p class="muted">Цены за один месяц без автопродления. Приём платежей пока не подключён.</p><div class="grid3">' + plans.map(function (p, i) {
       return '<div class="card plan"><span class="tag">' + (i === 1 ? 'Рекомендуемый' : 'Тариф') + '</span><h2 style="margin:15px 0 5px">' + esc(p.name) + '</h2><div class="price">' + p.price_rub.toLocaleString('ru-RU') + ' ₽ <small>/ месяц</small></div><p>' + planLimitsText(p.limits) + '</p>' + button('Оплатить картой', 'pay', i === 1 ? 'primary' : '', 'data-plan="' + esc(p.code) + '"') + '</div>';
-    }).join('') + '</div><p class="notice" style="margin-top:24px">Можно сначала зарегистрироваться и пройти трёхдневное демо без карты. ' + button('Зарегистрироваться', 'register', 'primary') + '</p></div>';
+    }).join('') + '</div><p class="notice" style="margin-top:24px">' + (state.registrationOpen ? 'Можно сначала зарегистрироваться и пройти трёхдневное демо без карты. ' + button('Зарегистрироваться', 'register', 'primary') : 'Сервис в закрытом тестировании: платёж пока недоступен. Оставьте заявку на ранний доступ. ' + button('Запросить ранний доступ', 'earlyAccess', 'primary')) + '</p></div>';
   }
   function planLimitsText(l) {
     if (!l) return '';
@@ -295,22 +357,25 @@
   }
   function faq() {
     var q = [
-      ['Как зарегистрироваться?', 'Нажмите «Зарегистрироваться» в шапке и укажите имя, email и пароль.'],
-      ['Как работает три дня?', '72 часа отсчитывает сервер с момента регистрации; сброс браузера или повторный вход срок не продлевают и не сбрасывают.'],
-      ['Откуда берутся новости?', 'С сайтов, которые вы добавляете в поток: система проверяет robots.txt, находит ленту (RSS/Atom, sitemap или список статей) и собирает материалы по расписанию. Публикации автоматом нет — каждый материал проверяет редактор. В демо-режиме сервера вместо этого показываются демонстрационные материалы (DEMO_FIXTURE).'],
+      state.registrationOpen
+        ? ['Как зарегистрироваться?', 'Нажмите «Зарегистрироваться» в шапке и укажите имя, email и пароль. Три дня демо отсчитывает сервер с момента регистрации; сброс браузера или повторный вход срок не продлевают.']
+        : ['Как получить доступ?', 'Сервис в закрытом тестировании. Нажмите «Запросить ранний доступ», заполните короткую форму — мы напишем на ваш email, когда сможем вас подключить.'],
+      ['Откуда берутся новости?', 'С сайтов, которые вы добавляете в поток: система проверяет robots.txt, находит ленту (RSS/Atom, sitemap или список статей) и собирает материалы по расписанию. Автоматической публикации нет — каждый материал проверяет и утверждает редактор.'],
+      ['Не копирует ли сервис чужие тексты?', 'Нет. Для каждого черновика считается процент совпадения с оригиналом; слишком близкий текст помечается, и юрист переписывает его своими словами. Сайт, откуда взята тема, в публикацию не попадает.'],
+      ['Куда выгружаются материалы?', 'В XML-файл (последние материалы или отмеченные вами) и по API с ключом. Отправка на Яндекс.Диск и e-mail появится позже.'],
       ['Можно оплатить картой?', 'Пока нет — платёжный провайдер не подключён, кнопка оплаты вернёт понятное сообщение об этом.']
     ];
     return '<div class="wrap section" style="max-width:850px"><h1>FAQ</h1>' + q.map(function (x) { return '<details class="card" style="margin:10px 0"><summary style="cursor:pointer;font-weight:700">' + x[0] + '</summary><p style="margin:13px 0 0">' + x[1] + '</p></details>'; }).join('') + '</div>';
   }
   function contacts() {
-    return '<div class="wrap section" style="max-width:760px"><h1>Контакты</h1><p class="notice">Форма демонстрационная; сообщения не отправляются (почтовый сервис не подключён).</p><form id="contact-form" class="card">' + field('contact-name', 'Имя') + field('contact-email', 'Email', 'email') + '<div class="field"><label for="contact-text">Сообщение</label><textarea id="contact-text"></textarea></div><button class="btn primary">Проверить форму</button></form></div>';
+    return '<div class="wrap section" style="max-width:760px"><h1>Контакты</h1><p class="muted">Мы пока не принимаем сообщения напрямую: свяжитесь с нами через заявку, и мы ответим на указанный в ней адрес.</p><div class="card"><p>Расскажите, кто вы и что для вас важно, — это поможет нам понять, чего не хватает в сервисе.</p><p>' + button('Оставить заявку на ранний доступ', 'earlyAccess', 'primary') + '</p></div></div>';
   }
   function privacy() {
-    return '<div class="wrap section" style="max-width:850px"><h1>Информация о демонстрации</h1><p class="notice">Не является готовой политикой обработки персональных данных.</p><h2>Регистрация</h2><p>Пароль хранится на сервере только в виде Argon2id-хеша.</p><h2>Трёхдневный срок</h2><p>Считается и хранится на сервере, не в браузере.</p><h2>Платежи и сбор</h2><p>Карты не принимаются, реальный сбор с сайтов не подключён.</p></div>';
+    return '<div class="wrap section" style="max-width:850px"><h1>Какие данные мы храним</h1><p class="notice">Учебный проект на стадии закрытого тестирования. Не является готовой политикой обработки персональных данных.</p><h2>Заявка на ранний доступ</h2><p>Имя, email, организация, род занятий и комментарий, которые вы указали сами. Используем только чтобы связаться с вами по ранней версии сервиса; повторная заявка с тем же email не создаётся.</p><h2>Аккаунт</h2><p>Имя, email и пароль. Пароль хранится на сервере только в виде Argon2id-хеша; сессия — в защищённой cookie.</p><h2>Статистика лендинга</h2><p>Мы считаем, сколько людей открыли страницу, нажали кнопку и отправили заявку. Для этого используется случайный идентификатор в вашем браузере — без имени, email, IP-адреса и сторонних счётчиков.</p><h2>Сбор материалов и платежи</h2><p>Материалы собираются с сайтов, на использование которых подтверждено право, с учётом robots.txt. Карты не принимаются.</p></div>';
   }
   function auth(kind) {
     return '<div class="auth"><aside class="authside"><span class="tag">Правовой Поток</span><h1>Новости — в работе. Контроль — у юриста.</h1><p class="muted">Зарегистрируйтесь для знакомства с интерфейсом на 72 часа.</p></aside><div class="authmain"><form id="auth-form" data-kind="' + kind + '" class="card"><h2>' + (kind === 'register' ? 'Регистрация' : kind === 'forgot' ? 'Восстановление доступа' : 'Вход') + '</h2>' +
-      (kind === 'register' ? '<p>После регистрации откроется трёхдневный демонстрационный кабинет.</p>' + field('auth-name', 'Имя') : '') +
+      (kind === 'register' ? (state.registrationOpen ? '<p>После регистрации откроется трёхдневный демонстрационный кабинет.</p>' : '<p class="notice warning">Сайт находится в разработке: регистрация временно закрыта. ' + button('Оставить заявку на ранний доступ', 'earlyAccess', 'primary') + '</p>') + field('auth-name', 'Имя') : '') +
       field('auth-email', 'Рабочий email', 'email') +
       (kind === 'forgot' ? '' : field('auth-password', kind === 'register' ? 'Придумайте пароль' : 'Пароль', 'password')) +
       (kind === 'register' ? field('auth-repeat', 'Повторите пароль', 'password') + '<label><input type="checkbox" id="auth-ok"> Ознакомлен с <button type="button" class="link" data-route="/privacy">информацией о демонстрации</button></label>' : '') +
@@ -584,6 +649,22 @@
     return html;
   }
 
+  // Проверка гипотезы: воронка лендинга и заявки на ранний доступ
+  function leadsAdminHtml() {
+    var d = state.leadsAdmin;
+    if (!d) return '<p class="small">Загрузка заявок…</p>';
+    var f = d.funnel;
+    function tile(label, value, hint) { return '<div class="card"><span class="small">' + label + '</span><div style="font-size:28px;font-weight:700;margin:4px 0">' + value + '</div>' + (hint ? '<span class="small">' + hint + '</span>' : '') + '</div>'; }
+    var html = '<p class="small">Гипотеза: юристам и редакциям нужен сервис, который готовит самостоятельные материалы из правовых новостей. Подтверждающий сигнал — заявки на ранний доступ с лендинга. Считаются уникальные посетители (случайный идентификатор браузера, без персональных данных).</p>'
+      + '<div class="grid3">' + tile('Посетители лендинга', f.landing_visitors, '') + tile('Нажали «Запросить доступ»', f.cta_clicks, f.cta_rate_pct + '% от посетителей') + tile('Открыли пример', f.demo_clicks, '') + '</div>'
+      + '<div class="grid3" style="margin-top:14px">' + tile('Открыли форму', f.form_opens, '') + tile('Заявок', f.leads, '') + tile('Конверсия в заявку', f.lead_rate_pct + '%', 'заявки / посетители') + '</div>'
+      + '<h3 style="margin-top:22px">Заявки на ранний доступ (' + d.total + ')</h3>';
+    html += d.leads.length ? '<table class="table"><thead><tr><th>Дата</th><th>Имя</th><th>Email</th><th>Организация</th><th>Чем занимается</th><th>Комментарий</th></tr></thead><tbody>' + d.leads.map(function (l) {
+      return '<tr><td>' + new Date(l.created_at).toLocaleString('ru-RU') + '</td><td>' + esc(l.name) + '</td><td>' + esc(l.email) + '</td><td>' + esc(l.organization) + '</td><td>' + esc(l.role) + '</td><td>' + esc(l.comment) + '</td></tr>';
+    }).join('') + '</tbody></table>' : '<p class="small">Заявок пока нет.</p>';
+    return html;
+  }
+
   function adminPage() {
     if (state.adminForbidden === null) {
       return page('Администрирование', '<div class="card"><p class="small">Проверяю права доступа…</p></div>');
@@ -591,10 +672,11 @@
     if (state.adminForbidden) {
       return page('Администрирование', '<div class="card"><p class="notice warning">Раздел доступен только администраторам платформы (platform_admin). Ваша роль — участник рабочего пространства, а не оператор платформы.</p></div>');
     }
-    return page('Администрирование', '<div class="grid3"><div class="card"><h3>Пользователи платформы</h3><strong>' + (state.adminUsers ? state.adminUsers.length : '—') + '</strong></div><div class="card"><h3>Материалов в вашем потоке</h3><strong>' + state.news.length + '</strong></div><div class="card"><h3>Экспортов</h3><strong>' + state.exportsList.length + '</strong></div></div><div class="tabs">' + ['Пользователи', 'Тарифы', 'События', 'ИИ-модели'].map(function (v) { return '<button data-admin="' + v + '" class="' + (v === state.adminTab ? 'active' : '') + '">' + v + '</button>'; }).join('') + '</div><div class="card">' + (
+    return page('Администрирование', '<div class="grid3"><div class="card"><h3>Пользователи платформы</h3><strong>' + (state.adminUsers ? state.adminUsers.length : '—') + '</strong></div><div class="card"><h3>Материалов в вашем потоке</h3><strong>' + state.news.length + '</strong></div><div class="card"><h3>Экспортов</h3><strong>' + state.exportsList.length + '</strong></div></div><div class="tabs">' + ['Пользователи', 'Тарифы', 'События', 'ИИ-модели', 'Заявки'].map(function (v) { return '<button data-admin="' + v + '" class="' + (v === state.adminTab ? 'active' : '') + '">' + v + '</button>'; }).join('') + '</div><div class="card">' + (
       state.adminTab === 'Пользователи' ? (state.adminUsers || []).map(function (u) { return '<p>' + esc(u.email) + (u.is_platform_admin ? ' · platform_admin' : '') + '</p>'; }).join('')
       : state.adminTab === 'Тарифы' ? (state.plansList || []).map(function (p) { return '<p>' + esc(p.name) + ' — ' + p.price_rub.toLocaleString('ru-RU') + ' ₽/мес.</p>'; }).join('')
       : state.adminTab === 'ИИ-модели' ? aiAdminHtml()
+      : state.adminTab === 'Заявки' ? leadsAdminHtml()
       : (state.activityList || []).map(function (e) { return '<p>' + esc(e.action) + '</p>'; }).join('')
     ) + '</div>');
   }
@@ -609,6 +691,7 @@
     else if (p === '/pricing') v = pricing();
     else if (p === '/faq') v = faq();
     else if (p === '/contacts') v = contacts();
+    else if (p === '/early-access') v = earlyAccessPage();
     else if (p === '/privacy') v = privacy();
     else if (p === '/login') v = auth('login');
     else if (p === '/register') v = auth('register');
@@ -727,7 +810,10 @@
         try { state.adminUsers = await api('/api/v1/admin/users'); state.adminForbidden = false; }
         catch (e) { if (e.code === 'FORBIDDEN') { state.adminForbidden = true; } else throw e; }
         state.plansList = await api('/api/v1/plans');
-        if (state.adminForbidden === false) { try { state.aiAdmin = await api('/api/v1/admin/ai'); } catch (e) { state.aiAdmin = null; } }
+        if (state.adminForbidden === false) {
+          try { state.aiAdmin = await api('/api/v1/admin/ai'); } catch (e) { state.aiAdmin = null; }
+          try { state.leadsAdmin = await api('/api/v1/admin/leads'); } catch (e) { state.leadsAdmin = null; }
+        }
         if (!state.activityList.length) state.activityList = await api('/api/v1/activity');
       }
       render();
@@ -759,7 +845,11 @@
   });
 
   function gate() {
-    if (!state.user) { modal('Сначала зарегистрируйтесь', '<p>Вы просматриваете пример. Зарегистрируйтесь и начните трёхдневное демо.</p>', 'Зарегистрироваться', function () { go('/register'); }); return false; }
+    if (!state.user) {
+      if (state.registrationOpen) modal('Сначала зарегистрируйтесь', '<p>Вы просматриваете пример. Зарегистрируйтесь и начните трёхдневное демо.</p>', 'Зарегистрироваться', function () { go('/register'); });
+      else modal('Это пример кабинета', '<p>Вы просматриваете демонстрацию. Чтобы работать с реальными данными, оставьте заявку на ранний доступ.</p>', 'Запросить доступ', function () { track('cta_click'); go('/early-access'); });
+      return false;
+    }
     if (state.access && !state.access.can_mutate) { modal('Демонстрация завершена', '<p>Новые запуски и утверждения недоступны. Материалы остаются видны; списаний нет.</p>', 'Смотреть тарифы', function () { go('/pricing'); }); return false; }
     return true;
   }
@@ -839,6 +929,7 @@
       if (a === 'home') return go('/');
       if (a === 'login') return go('/login');
       if (a === 'register') return go('/register');
+      if (a === 'earlyAccess') { track('cta_click'); return go('/early-access'); }
       if (a === 'forgot') return go('/forgot');
       if (a === 'features') return go('/features');
       if (a === 'pricing') return go('/pricing');
@@ -848,7 +939,7 @@
       if (a === 'setup') return go('/app/setup');
       if (a === 'app') return go('/app');
       if (a === 'logout') return doLogout();
-      if (a === 'demo') { state.user = null; state.guestBrowsing = true; go('/app'); return; }
+      if (a === 'demo') { track('demo_click'); state.user = null; state.guestBrowsing = true; go('/app'); return; }
       if (a === 'example' || a === 'open') {
         var id = a === 'example' ? currentNewsSource()[0].id : b.dataset.id;
         if (state.user) {
@@ -1210,7 +1301,28 @@
         }
         await doLogin(email, value('auth-password'));
       }
-      if (e.target.id === 'contact-form') { e.preventDefault(); toast('Форма демо: сообщение не отправлено (почта не подключена)'); }
+      if (e.target.id === 'lead-form') {
+        e.preventDefault();
+        if (state.leadSending) return;
+        ['lead-name', 'lead-email', 'lead-consent'].forEach(function (k) { var el = document.getElementById('err-' + k); if (el) el.textContent = ''; });
+        var okForm = true;
+        if (!value('lead-name')) { document.getElementById('err-lead-name').textContent = 'Укажите имя'; okForm = false; }
+        if (!/^\S+@\S+\.\S+$/.test(value('lead-email'))) { document.getElementById('err-lead-email').textContent = 'Укажите корректный email'; okForm = false; }
+        if (!document.getElementById('lead-consent').checked) { document.getElementById('err-lead-consent').textContent = 'Нужно согласие на обработку данных'; okForm = false; }
+        if (!okForm) return;
+        var leadBody = {
+          name: value('lead-name'), email: value('lead-email'), organization: value('lead-org'), role: value('lead-role'),
+          comment: value('lead-comment'), consent: true, visitor_id: visitorId(), website: value('lead-website')
+        };
+        state.leadDraft = leadBody; state.leadSending = true; render();
+        try {
+          var leadRes = await api('/api/v1/public/early-access', { method: 'POST', body: leadBody });
+          state.leadMessage = leadRes.message; state.leadDraft = null;
+        } catch (leadErr) {
+          toast(leadErr.code === 'RATE_LIMITED' ? 'Слишком много попыток — попробуйте через час' : leadErr.message, true);
+        } finally { state.leadSending = false; render(); }
+        return;
+      }
     } catch (err) {
       if (err.code === 'VALIDATION_ERROR') toast(err.message, true);
       else if (err.code === 'UNAUTHORIZED') toast('Неверный email или пароль', true);
@@ -1299,6 +1411,7 @@
   document.addEventListener('visibilitychange', function () { if (!document.hidden) pollNow(); });
 
   async function boot() {
+    try { state.registrationOpen = !!(await api('/api/v1/public/config')).registration_open; } catch (e) { state.registrationOpen = false; }
     try {
       state.user = await api('/api/v1/auth/me');
       go('/app');
