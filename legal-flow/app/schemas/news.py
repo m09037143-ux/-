@@ -59,6 +59,9 @@ class NewsListItemOut(BaseModel):
     has_official_document: bool
     has_draft: bool = False
     source_overlap: SourceOverlapOut | None = None
+    # Сколько раз автоматический черновик не получился и почему (для материалов без черновика)
+    draft_failures: int = 0
+    draft_failure_reason: str = ""
     created_at: datetime
 
 

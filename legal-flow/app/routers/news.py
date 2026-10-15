@@ -52,13 +52,18 @@ async def list_news(
     stmt = stmt.order_by(NewsItem.created_at.desc()).limit(limit).offset(offset)
 
     items = (await db.scalars(stmt)).all()
+    failures = await ai_service.draft_failures(
+        db, workspace_id=membership.workspace_id, news_ids=[n.id for n in items if not n.text and n.status == NewsStatus.DISCOVERED]
+    )
     out = []
     for n in items:
         has_doc = (await db.scalar(select(OfficialDocument.id).where(OfficialDocument.news_item_id == n.id))) is not None
+        fail_count, fail_reason = failures.get(str(n.id), (0, ""))
         out.append(
             NewsListItemOut(
                 id=n.id, title=n.title, discovery_domain=n.discovery_domain,
-                status=n.status.value, has_official_document=has_doc, has_draft=bool(n.text), source_overlap=n.source_overlap, created_at=n.created_at,
+                status=n.status.value, has_official_document=has_doc, has_draft=bool(n.text), source_overlap=n.source_overlap,
+                draft_failures=fail_count, draft_failure_reason=fail_reason, created_at=n.created_at,
             )
         )
     return out

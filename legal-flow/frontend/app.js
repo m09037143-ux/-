@@ -472,7 +472,12 @@
         && (state.newsSourceFilter === 'Все' || x.discovery_domain === state.newsSourceFilter);
     });
     return list.length ? '<table class="table"><thead><tr><th>Материал</th><th>Источник обнаружения</th><th>Официальный документ</th><th>Совпадение</th><th>Статус</th><th>Действие</th></tr></thead><tbody>' + list.map(function (x) {
-      var pendingMark = (x.status === 'DISCOVERED' && !x.has_draft && state.flow && state.flow.auto_draft !== false && Date.now() - new Date(x.created_at).getTime() < RECENT_MS) ? '<br><span class="small">⏳ черновик готовится…</span>' : '';
+      var pendingMark = '';
+      if (x.status === 'DISCOVERED' && !x.has_draft) {
+        if (x.draft_failures >= 2) pendingMark = '<br><span class="small" style="color:var(--danger,#b42318)">⚠ черновик не подготовлен (' + esc(x.draft_failure_reason || 'ошибка') + '). Откройте материал и нажмите «Сгенерировать черновик через ИИ».</span>';
+        else if (x.draft_failures === 1) pendingMark = '<br><span class="small">⚠ не получилось (' + esc(x.draft_failure_reason || 'ошибка') + ') — попробуем ещё раз автоматически</span>';
+        else if (state.flow && state.flow.auto_draft !== false && Date.now() - new Date(x.created_at).getTime() < RECENT_MS) pendingMark = '<br><span class="small">⏳ черновик готовится…</span>';
+      }
       return '<tr><td>' + esc(x.title) + pendingMark + '</td><td>' + esc(x.discovery_domain) + '</td><td>' + (x.has_official_document ? 'Указан' : 'Не указан') + '</td><td>' + overlapBadge(x.source_overlap) + '</td><td>' + badge(x.status) + '</td><td>' + button('Открыть', 'open', '', 'data-id="' + x.id + '"') + '</td></tr>';
     }).join('') + '</tbody></table>' : '<p>По выбранным фильтрам материалов нет.</p>';
   }
@@ -1362,10 +1367,11 @@
   function draftsPending() {
     if (!state.flow || state.flow.auto_draft === false) return [];
     var now = Date.now();
-    return (state.news || []).filter(function (x) { return x.status === 'DISCOVERED' && !x.has_draft && now - new Date(x.created_at).getTime() < RECENT_MS; });
+    // материалы с неудачной попыткой не считаем «готовящимися»: их повторит воркер раз в 10 минут, часто опрашивать не нужно
+    return (state.news || []).filter(function (x) { return x.status === 'DISCOVERED' && !x.has_draft && !(x.draft_failures > 0) && now - new Date(x.created_at).getTime() < RECENT_MS; });
   }
   function newsSignature(list) {
-    return JSON.stringify((list || []).map(function (x) { return [x.id, x.status, x.has_draft, x.has_official_document, x.source_overlap ? x.source_overlap.share : null]; }));
+    return JSON.stringify((list || []).map(function (x) { return [x.id, x.status, x.has_draft, x.has_official_document, x.source_overlap ? x.source_overlap.share : null, x.draft_failures]; }));
   }
   function jobActive() { return state.scanJobStatus === 'pending' || state.scanJobStatus === 'running'; }
   function pollDelay() { return jobActive() ? POLL_FAST_MS : draftsPending().length ? POLL_DRAFTS_MS : POLL_IDLE_MS; }

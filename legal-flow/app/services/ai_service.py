@@ -179,6 +179,47 @@ async def _draft_one(db: AsyncSession, news: NewsItem, owner_id: uuid.UUID, summ
         logger.exception("автоматический черновик для %s не удался", news.id)
         await db.rollback()
         summary["failed"] += 1
+        await log_activity(
+            db, workspace_id=news.workspace_id, action="auto_draft_failed",
+            details={"news_id": str(news.id), "reason": "внутренняя ошибка при подготовке черновика"},
+        )  # без записи в журнал материал в списке выглядел бы «готовящимся» бесконечно
+
+
+def friendly_failure_reason(reason: str) -> str:
+    """Причина неудачи человеческим языком (в журнале остаётся полный технический текст)."""
+    low = (reason or "").lower()
+    if "timeout" in low:
+        return "модель не успела ответить"
+    if "invalid_json" in low or "структур" in low:
+        return "модель вернула ответ в неверном формате"
+    if "отказал" in low or "refus" in low:
+        return "модель отказалась обрабатывать материал (чувствительная тема)"
+    if "бюджет" in low or "budget" in low:
+        return "исчерпан дневной лимит ИИ"
+    return (reason or "причина не записана")[:120]
+
+
+async def draft_failures(db: AsyncSession, *, workspace_id: uuid.UUID, news_ids: list[uuid.UUID]) -> dict[str, tuple[int, str]]:
+    """news_id → (сколько раз автоматический черновик не получился, причина последней неудачи простыми словами)."""
+    if not news_ids:
+        return {}
+    events = (
+        await db.scalars(
+            select(ActivityEvent)
+            .where(
+                ActivityEvent.workspace_id == workspace_id,
+                ActivityEvent.action == "auto_draft_failed",
+                ActivityEvent.details["news_id"].as_string().in_([str(i) for i in news_ids]),
+            )
+            .order_by(ActivityEvent.created_at.desc())
+        )
+    ).all()
+    out: dict[str, tuple[int, str]] = {}
+    for event in events:  # от новых к старым: первая причина — самая свежая
+        details = event.details or {}
+        count, reason = out.get(details.get("news_id"), (0, ""))
+        out[details.get("news_id")] = (count + 1, reason or friendly_failure_reason(details.get("reason", "")))
+    return out
 
 
 async def auto_generate_drafts(db: AsyncSession, job: ScanJob) -> dict:

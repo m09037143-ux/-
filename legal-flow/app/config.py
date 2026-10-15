@@ -38,7 +38,9 @@ class Settings(BaseSettings):
     yandex_api_key: str = ""
     llm_fixture_mode: bool = True
     llm_token_budget_per_workspace_day: int = 200_000
-    llm_timeout_seconds: float = 30.0
+    # Ответ паспорта фактов (до 4000 токенов) у запасных открытых моделей (deepseek и др.) занимает больше 30 с —
+    # при 30 с черновики массово падали по ReadTimeout. Воркер асинхронный, ожидание дольше никому не мешает.
+    llm_timeout_seconds: float = 90.0
     # Лимит токенов в ответе модели. 2000 обрезало JSON на длинных статьях (25 фактов).
     llm_max_tokens: int = 4000
     # Запасная модель ТОЛЬКО на случай отказа основной (фильтр YandexGPT на чувствительные
